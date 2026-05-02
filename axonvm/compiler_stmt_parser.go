@@ -384,6 +384,9 @@ func (c *Compiler) parseStatement() {
 			}
 		} else if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctDot {
 			// Member call or property set: Response.Write "Hello" / obj.Prop = value
+			// Save the bytecode position BEFORE emitting the object-load opcode so that
+			// the Response.Write peephole optimisation can trim it if the fast path applies.
+			objectEmitStart := len(c.bytecode)
 			if !c.emitStaticObjectIdentifierFallback(name) {
 				op, idx := c.resolveVar(name)
 				c.emit(op, idx)
@@ -447,6 +450,27 @@ func (c *Compiler) parseStatement() {
 				}
 			} else {
 				// Member sub call without parentheses: obj.Method arg1, arg2
+				//
+				// Peephole optimisation for Response.Write <expr>:
+				// When the target is the intrinsic Response object (not shadowed by the user)
+				// and the method is Write with a single argument that is a top-level &
+				// concatenation chain, flatten the chain into individual stack pushes and
+				// emit OpWriteN(N) instead of the normal OpConcat+OpCallMember sequence.
+				// This eliminates all intermediate concatenated string Value allocations.
+				// The optimisation is safe because all operands are fully evaluated before
+				// any write occurs, preserving On Error Resume Next semantics.
+				if !c.isStatementEnd() &&
+					strings.EqualFold(name, "Response") &&
+					len(memberChain) == 1 &&
+					strings.EqualFold(memberChain[0], "Write") {
+					// Trim the object-load opcode we already emitted for Response; OpWriteN
+					// goes directly through vm.output so the object reference is not needed.
+					c.bytecode = c.bytecode[:objectEmitStart]
+					count := c.parseResponseWriteFlatChain()
+					c.emit(OpWriteN, count)
+					return
+				}
+
 				argCount := 0
 				if !c.isStatementEnd() {
 					for {
@@ -2635,4 +2659,30 @@ func (c *Compiler) expectIdentifier() string {
 	default:
 		panic(c.vbCompileError(vbscript.ExpectedIdentifier, fmt.Sprintf("Expected identifier, got %T", c.next)))
 	}
+}
+
+// parseResponseWriteFlatChain parses the top-level & concatenation chain that
+// appears as the argument to Response.Write and pushes each operand individually
+// onto the VM stack.  It stops as soon as the token stream no longer has a '&'
+// operator at the concatenation precedence level (i.e. it honours all higher-
+// priority operators such as +, *, unary Not, etc.).
+//
+// The returned count tells OpWriteN how many stack values to consume.
+// Only the outmost & chain is flattened; nested parenthesised expressions or
+// sub-expressions with their own & are compiled normally (they still produce a
+// single Value via the regular OpConcat path inside parseExpression).
+func (c *Compiler) parseResponseWriteFlatChain() int {
+	// Parse the first operand using PrecTerm (= PrecConcat+1) so that the
+	// recursive descent stops at the outermost & without consuming it.
+	c.parseExpression(PrecTerm)
+	count := 1
+	for {
+		if p, ok := c.next.(*vbscript.PunctuationToken); !ok || p.Type != vbscript.PunctAmp {
+			break
+		}
+		c.move() // consume '&'
+		c.parseExpression(PrecTerm)
+		count++
+	}
+	return count
 }

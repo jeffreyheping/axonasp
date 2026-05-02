@@ -709,6 +709,7 @@ func executeASPWithStatus(w http.ResponseWriter, r *http.Request, filePath strin
 			}
 			host.PersistSession()
 			host.Response().Flush()
+			host.Response().ReleaseBuffer()
 			return
 
 		case <-watchdog.C:

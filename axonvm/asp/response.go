@@ -36,6 +36,21 @@ import (
 // ResponseEndSignal is used to terminate script execution after Response.End/Redirect.
 const ResponseEndSignal = "RESPONSE_END"
 
+// responseBufferPool pools pre-allocated []byte slices that back the per-request
+// Response body buffer. Reusing these slices across requests eliminates the
+// per-request heap allocation and reduces GC pressure under concurrent load.
+// Buffers larger than maxPooledBufferCap are discarded instead of pooled so
+// a single unusually-large page does not hold a huge slab across all requests.
+const maxPooledBufferCap = 256 * 1024 // 256 KB upper limit for pooled slices
+
+var responseBufferPool = sync.Pool{
+	New: func() any {
+		// Start with 8 KB — comfortably covers most classic ASP pages.
+		b := make([]byte, 0, 8192)
+		return &b
+	},
+}
+
 // ResponseCookie stores one response cookie and its optional properties.
 type ResponseCookie struct {
 	Name       string
@@ -92,10 +107,14 @@ func (e *ResponseBufferLimitError) Error() string {
 }
 
 // NewResponse creates a new response object with ASP-compatible defaults.
+// The internal body buffer is obtained from a global sync.Pool to avoid a
+// per-request heap allocation on the hot HTTP/FastCGI path.
 func NewResponse(output io.Writer) *Response {
+	bufPtr := responseBufferPool.Get().(*[]byte)
+	*bufPtr = (*bufPtr)[:0] // reset length, keep capacity
 	r := &Response{
 		Output:         output,
-		buffer:         make([]byte, 0),
+		buffer:         *bufPtr,
 		bufferEnabled:  true,
 		maxBufferBytes: DefaultResponseBufferLimitBytes,
 		cacheControl:   "Private",
@@ -651,6 +670,27 @@ func (r *Response) flushInternal() {
 
 	if flusher, ok := r.Output.(http.Flusher); ok {
 		flusher.Flush()
+	}
+}
+
+// ReleaseBuffer returns the internal body buffer to the global pool so it can be
+// reused by the next request without a heap allocation. This must be called exactly
+// once per request, AFTER all response content has been flushed to the wire (i.e.
+// after Flush / flushInternal has run). Callers in server, fastcgi, and cli host
+// layers are responsible for invoking this method in their request completion path.
+func (r *Response) ReleaseBuffer() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	buf := r.buffer
+	r.buffer = nil
+	r.mu.Unlock()
+	// Only return reasonably-sized buffers to the pool; discard unusually large ones
+	// so a single huge page does not permanently inflate the pooled slab size.
+	if buf != nil && cap(buf) > 0 && cap(buf) <= maxPooledBufferCap {
+		b := buf[:0]
+		responseBufferPool.Put(&b)
 	}
 }
 

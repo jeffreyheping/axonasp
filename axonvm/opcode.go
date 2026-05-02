@@ -77,6 +77,16 @@ const (
 	// Output
 	OpWrite
 	OpWriteStatic
+	// OpWriteN is the zero-allocation Response.Write optimisation emitted by the
+	// compiler when the argument to Response.Write is a top-level & concatenation
+	// chain.  Instead of building intermediate string Values with OpConcat and then
+	// passing a single concatenated Value to OpCallMember(Write,1), the compiler
+	// pushes every individual operand onto the stack and emits OpWriteN(N).  The VM
+	// pops N values, converts each to its string representation using the per-VM
+	// stringWorkBuffer, and writes all parts in a single Response.Write call — one
+	// mutex acquisition, no intermediate string allocations.
+	// [OpCode, CountHigh, CountLow]
+	OpWriteN
 
 	// Configuration
 	OpSetOption           // [OpCode, OptionID, ValueID]
@@ -322,6 +332,8 @@ func (op OpCode) String() string {
 		return "OpWrite"
 	case OpWriteStatic:
 		return "OpWriteStatic"
+	case OpWriteN:
+		return "OpWriteN"
 	case OpSetDirective:
 		return "OpSetDirective"
 	case OpRegisterClass:

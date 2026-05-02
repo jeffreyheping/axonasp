@@ -739,6 +739,7 @@ func executeCLICode(code string, virtualPath string, tuiMode bool) cliExecutionR
 
 	runErr := vm.Run()
 	host.Response().Flush()
+	host.Response().ReleaseBuffer()
 
 	result.output = outBuf.String()
 	result.runtimeErr = runErr
@@ -784,6 +785,7 @@ func executeCLIFile(filePath string, virtualPath string, tuiMode bool) cliExecut
 
 	runErr := vm.Run()
 	host.Response().Flush()
+	host.Response().ReleaseBuffer()
 
 	result.output = outBuf.String()
 	result.runtimeErr = runErr

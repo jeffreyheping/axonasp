@@ -391,6 +391,9 @@ func (vm *VM) logicalImp(a Value, b Value) Value {
 
 // concatValues concatenates two values as strings.
 // VBScript '&' coerces Null operands to a zero-length string during concatenation.
+// Uses vm.stringWorkBuffer as a reusable scratch buffer so that both parts can be
+// appended without the hidden intermediate allocation that Go's '+' operator causes
+// when one operand is not yet a string (e.g. numbers, dates, native objects).
 func (vm *VM) concatValues(a Value, b Value) Value {
 	if isNull(a) {
 		a = NewString("")
@@ -398,5 +401,17 @@ func (vm *VM) concatValues(a Value, b Value) Value {
 	if isNull(b) {
 		b = NewString("")
 	}
-	return NewString(vm.valueToString(a) + vm.valueToString(b))
+	// Fast-path: both operands are already plain strings — one allocation for the join.
+	if a.Type == VTString && b.Type == VTString {
+		vm.stringWorkBuffer = vm.stringWorkBuffer[:0]
+		vm.stringWorkBuffer = append(vm.stringWorkBuffer, a.Str...)
+		vm.stringWorkBuffer = append(vm.stringWorkBuffer, b.Str...)
+		return NewString(string(vm.stringWorkBuffer))
+	}
+	// General path: convert both to strings via the reusable scratch buffer to avoid
+	// creating a temporary intermediate string from the '+' operator.
+	vm.stringWorkBuffer = vm.stringWorkBuffer[:0]
+	vm.stringWorkBuffer = append(vm.stringWorkBuffer, vm.valueToString(a)...)
+	vm.stringWorkBuffer = append(vm.stringWorkBuffer, vm.valueToString(b)...)
+	return NewString(string(vm.stringWorkBuffer))
 }

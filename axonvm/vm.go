@@ -428,6 +428,12 @@ type VM struct {
 	argBuffer     []Value
 	indexBuffer   []Value
 	combineBuffer []Value
+	// stringWorkBuffer is a per-VM scratch byte slice used by concatValues to build
+	// concatenated strings without triggering an extra intermediate Go string allocation
+	// from the built-in '+' operator. It is reset to length zero before each use and
+	// cleared after each VM run so the backing array can be collected by the GC when
+	// the VM is returned to its pool.
+	stringWorkBuffer []byte
 
 	pooledFrom      *vmProgramPool
 	pooledSlot      chan struct{}
@@ -459,6 +465,7 @@ func NewVM(bytecode []byte, constants []Value, globalCount int) *VM {
 		argBuffer:                      make([]Value, 0, 16),
 		indexBuffer:                    make([]Value, 0, 16),
 		combineBuffer:                  make([]Value, 0, 16),
+		stringWorkBuffer:               make([]byte, 0, 256),
 		withStack:                      make([]Value, 0, 8),
 		nextDynamicNativeID:            20000,
 		nextDynamicClassID:             60000,
@@ -795,7 +802,7 @@ func (vm *VM) attachDynamicClassResolutionContext(compiler *Compiler) {
 func opcodeOperandSize(op OpCode) int {
 	switch op {
 	// 2-byte operands
-	case OpConstant, OpWriteStatic,
+	case OpConstant, OpWriteStatic, OpWriteN,
 		OpGetClassMember, OpSetClassMember, OpEraseClassMember, OpLetClassMember, OpArgClassMemberRef,
 		OpMemberSet, OpMemberSetSet,
 		OpNewClass,
@@ -921,7 +928,7 @@ func remapExecuteGlobalBytecode(bytecode []byte, constBase int, bytecodeBase int
 			userSubIdx := int(binary.BigEndian.Uint16(bytecode[ip:])) + constBase
 			binary.BigEndian.PutUint16(bytecode[ip:], uint16(userSubIdx))
 			ip += 6
-		case OpGetGlobal, OpSetGlobal, OpGetLocal, OpSetLocal, OpLabel, OpArgGlobalRef, OpArgLocalRef, OpLetGlobal, OpLetLocal, OpCall, OpIncLocalInt, OpDecLocalInt:
+		case OpGetGlobal, OpSetGlobal, OpGetLocal, OpSetLocal, OpLabel, OpArgGlobalRef, OpArgLocalRef, OpLetGlobal, OpLetLocal, OpCall, OpIncLocalInt, OpDecLocalInt, OpWriteN:
 			ip += 2
 		case OpJSForIterEnter, OpJSForIterExit:
 			// Variable-length: [numVars(2), nameIdx1(2), nameIdx2(2), ...]
@@ -1228,6 +1235,9 @@ func (vm *VM) Run() (err error) {
 	operationCount := 0
 	jsBackJumpCount := 0
 	vm.jsStringWorkBytes = 0
+	// Reset the concat scratch buffer so leftover capacity from a previous run does not
+	// pin a large backing array unnecessarily across request boundaries.
+	vm.stringWorkBuffer = vm.stringWorkBuffer[:0]
 
 aspExecLoop:
 	for vm.ip < len(vm.bytecode) {
@@ -1742,6 +1752,39 @@ aspExecLoop:
 			val := vm.pop()
 			if vm.output != nil {
 				io.WriteString(vm.output, vm.valueToString(val))
+			}
+
+		case OpWriteN:
+			// OpWriteN pops N values (pushed in left-to-right evaluation order) and
+			// writes each as a string directly to the Response without creating
+			// intermediate concatenated Value objects.  All N parts are accumulated
+			// into vm.stringWorkBuffer and flushed with a single host.WriteString call
+			// so the Response mutex is acquired only once.
+			n := int(binary.BigEndian.Uint16(vm.bytecode[vm.ip:]))
+			vm.ip += 2
+			if n > 0 && vm.output != nil {
+				// Ensure indexBuffer has capacity for N entries.
+				if cap(vm.indexBuffer) < n {
+					vm.indexBuffer = make([]Value, n)
+				}
+				parts := vm.indexBuffer[:n]
+				// Pop in reverse order (TOS = last operand) and store in left-to-right order.
+				for i := n - 1; i >= 0; i-- {
+					parts[i] = vm.pop()
+				}
+				// Accumulate all parts into the reusable scratch buffer, then write once.
+				vm.stringWorkBuffer = vm.stringWorkBuffer[:0]
+				for i := 0; i < n; i++ {
+					vm.stringWorkBuffer = append(vm.stringWorkBuffer, vm.valueToString(parts[i])...)
+				}
+				if len(vm.stringWorkBuffer) > 0 {
+					io.WriteString(vm.output, string(vm.stringWorkBuffer))
+				}
+			} else {
+				// Drain stack even if output is nil.
+				for i := 0; i < n; i++ {
+					vm.pop()
+				}
 			}
 
 		case OpCallMember:
