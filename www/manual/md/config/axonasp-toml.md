@@ -184,13 +184,30 @@ When enabled, AxonASP writes runtime diagnostic files in `./temp/`:
 
 Use this setting during development and incident diagnostics. In production, monitor file size and use rotation policies to prevent unbounded disk growth.
 
-**Migration Note:**
-The previous setting name was `enable_error_log_file`. The active configuration key is now `enable_log_files` in `config/axonasp.toml`. Existing deployments that still have `enable_error_log_file` should migrate to `enable_log_files` to keep configuration explicit and future-proof.
-
 **Example:**
 ```toml
 enable_log_files = true
 ```
+
+### enable_error_log_file *(Deprecated)*
+
+**Type:** Boolean  
+**Environment Variable:** `ENABLE_ERROR_LOG_FILE`  
+**Status:** **Deprecated since version 2.1** — replaced by `enable_log_files`
+
+This setting is retained for backward compatibility only. If `enable_log_files` is present in the configuration, this setting is ignored. If `enable_log_files` is absent, the server falls back to this key.
+
+**Action required:** Replace `enable_error_log_file` with `enable_log_files` in your configuration file.
+
+```toml
+# Old (deprecated)
+enable_error_log_file = true
+
+# New (use this instead)
+enable_log_files = true
+```
+
+---
 
 ### dump_preprocessed_source
 
@@ -284,38 +301,42 @@ clean_cache_on_startup = true
 
 ### vm_pool_size
 
-**Type:** Integer (0 = unlimited)  
-**Default:** `100`  
+**Type:** Integer  
+**Default:** `10`  
 **Environment Variable:** `VM_POOL_SIZE`
 
-Number of virtual machine instances in the execution pool. Each VM can execute one script simultaneously, so pool size determines concurrent execution capacity.
+Number of virtual machine instances in the execution pool. Each VM can execute one script simultaneously, so pool size determines concurrent execution capacity. A pool size of 10 VMs on a server with 512 MB of memory can handle approximately 2000 simultaneous requests for simple pages.
 
 **Guidelines:**
-- **Small Sites:** 25-50 VMs
-- **Medium Sites:** 50-100 VMs
-- **High-Traffic Sites:** 100-200+ VMs (0 for unlimited)
+- **Small Sites:** 5-10 VMs
+- **Medium Sites:** 10-25 VMs
+- **High-Traffic Sites:** 50-100+ VMs
 
-⚠️ Setting too high causes memory exhaustion; too low causes request queueing.
+**Tuning tip:** If the server is dropping or queuing requests, lower `vm_pool_size` and raise `golang_memory_limit_mb`. Request blocking is usually caused by Garbage Collector pressure rather than insufficient VM count. `golang_memory_limit_mb` has a stronger influence on throughput than `vm_pool_size`.
+
+⚠️ Setting too high causes memory exhaustion; too low causes request queueing. You must use a value greater than 1.
 
 **Example:**
 ```toml
-vm_pool_size = 100
+vm_pool_size = 10
 ```
 
 ### golang_memory_limit_mb
 
 **Type:** Integer (0 = unlimited)  
-**Default:** `128`  
+**Default:** `512`  
 **Environment Variable:** `GOLANG_MEMORY_LIMIT_MB`
 
-Maximum memory the Go runtime can allocate (in megabytes). `0` means unlimited.
+Maximum memory the Go runtime is allowed to use (in megabytes). `0` means unlimited. This directive has a stronger influence on server throughput than `vm_pool_size` and directly affects how memory-intensive libraries such as G3ZSTD work.
 
 **Guidelines:**
-- **Development:** 128-256 MB
-- **Production:** 256-512 MB (or higher based on workload)
-- **Containerized:** Set based on container limits
+- **Development:** 256-512 MB
+- **Production:** 512 MB or higher based on workload and number of concurrent VMs
+- **Containerized:** Set to a value below the container memory limit
 
-⚠️ Note: Go runtime may not strictly enforce this limit; actual usage can vary.
+**Tuning tip:** If the server is missing or delaying requests, increase this value before raising `vm_pool_size`. Requests stalling are usually caused by Garbage Collector pressure triggered by a low memory ceiling rather than an insufficient VM pool.
+
+⚠️ Note: The Go runtime may not strictly enforce this limit; actual memory usage can vary based on workload and GC behavior. Setting this too low may lead to performance degradation or out-of-memory errors.
 
 **Example:**
 ```toml
@@ -325,20 +346,20 @@ golang_memory_limit_mb = 512
 ### session_flush_interval_seconds
 
 **Type:** Integer (seconds)  
-**Default:** `15`  
+**Default:** `120`  
 **Environment Variable:** `SESSION_FLUSH_INTERVAL_SECONDS`
 
-Interval for asynchronously flushing dirty in-memory sessions to disk. Higher values reduce disk I/O; lower values provide fresher data.
+Interval for asynchronously flushing dirty in-memory sessions to disk. A value greater than `0` keeps session writes off the request hot path while still guaranteeing a safe flush on process shutdown. Higher values reduce disk I/O; lower values provide fresher data.
 
 **Guidelines:**
-- `0` - Synchronous writes (safe but slower)
-- `5-10` - Frequent writes (good for critical data)
-- `15-30` - Balanced (default)
-- `60+` - Reduced I/O (requires crash-safe handling)
+- `0` - Synchronous writes on every change (safe but slower)
+- `30-60` - Frequent writes (good for critical session data)
+- `120` - Balanced default
+- `300+` - Reduced I/O (suitable for read-heavy applications)
 
 **Example:**
 ```toml
-session_flush_interval_seconds = 15
+session_flush_interval_seconds = 120
 ```
 
 ### adodb_platform_architecture
@@ -439,6 +460,23 @@ When enabled, allows running ASP scripts directly from command line:
 **Example:**
 ```toml
 enable_cli_run_from_command_line = true
+```
+
+### force_fresh_compile
+
+**Type:** Boolean  
+**Default:** `true`  
+**Environment Variable:** `FORCE_FRESH_COMPILE`
+
+When `true`, CLI execution always recompiles scripts and bypasses the bytecode cache entirely. When `false`, the CLI follows the global `bytecode_caching_enabled` setting.
+
+**Guidelines:**
+- `true` - Recommended for TUI and development workflows to ensure the latest script version is always executed
+- `false` - Suitable for scheduled or automated `-r` runs where caching improves performance and scripts do not change frequently
+
+**Example:**
+```toml
+force_fresh_compile = true
 ```
 
 ---

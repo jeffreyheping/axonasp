@@ -97,10 +97,8 @@ func (m *MockHost) ExecuteCompiles() int { return m.executeCompiles }
 
 // Compatibility: Delegate to Response
 func (m *MockHost) Write(p []byte) (int, error) {
-	if m.response.Output != nil {
-		return m.response.Output.Write(p)
-	}
-	return 0, nil
+	m.response.Write(string(p))
+	return len(p), nil
 }
 
 func (m *MockHost) WriteString(s string) {

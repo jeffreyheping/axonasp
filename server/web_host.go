@@ -86,8 +86,8 @@ func NewWebHost(w http.ResponseWriter, r *http.Request) *WebHost {
 
 	// Populate Request object
 	// 1. QueryString
-	for k, v := range r.URL.Query() {
-		host.request.QueryString.AddValues(k, v)
+	if len(r.URL.RawQuery) > 0 {
+		host.request.QueryString.SetLazyPayload([]byte(r.URL.RawQuery))
 	}
 
 	// 2. Lazy body + form loaders to keep GET/HEAD hot paths allocation-free.
@@ -100,15 +100,6 @@ func NewWebHost(w http.ResponseWriter, r *http.Request) *WebHost {
 			return nil, err
 		}
 		return loadedBody, nil
-	})
-	host.request.SetFormLoader(func() (map[string][]string, error) {
-		if r.Method != http.MethodPost {
-			return map[string][]string{}, nil
-		}
-		if err := r.ParseForm(); err != nil {
-			return nil, err
-		}
-		return r.PostForm, nil
 	})
 
 	// 3. Cookies

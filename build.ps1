@@ -33,7 +33,10 @@ param(
     [switch]$Clean,
 
     [Parameter(Mandatory = $false)]
-    [switch]$Test
+    [switch]$Test,
+
+    [Parameter(Mandatory = $false)]
+    [string]$Tags = ""
 )
 
 # --- AUTOMATIC VERSION CONFIGURATION ---
@@ -73,6 +76,9 @@ catch {
 
 $FullVersion = "$Major.$Minor.$Patch.$Revision"
 
+# Normalize Go build tags so users can pass comma/semicolon/space-separated values.
+$NormalizedTags = ($Tags -replace '[,;]+', ' ').Trim()
+
 # Color output functions
 function Write-Success { param([string]$Message); Write-Host $Message -ForegroundColor Green }
 function Write-Info { param([string]$Message); Write-Host $Message -ForegroundColor Cyan }
@@ -84,6 +90,9 @@ Write-Host ""
 Write-Host "=======================================================" -ForegroundColor Magenta
 Write-Host "  G3Pix AxonASP Build Script" -ForegroundColor White
 Write-Host "  Version: $FullVersion" -ForegroundColor Cyan
+if ($NormalizedTags) {
+    Write-Host "  Build Tags: $NormalizedTags" -ForegroundColor Yellow
+}
 Write-Host "=======================================================" -ForegroundColor Magenta
 Write-Host ""
 
@@ -131,10 +140,15 @@ function Build-Binary {
     $OutputFile = "${OutputName}${Extension}"
     # Linker flags: -s (strip symbol table), -w (omit DWARF), -X main.Version=... (embed version)
     $LdFlags = "-s -w -X main.Version=$FullVersion"
+    $BuildArgs = @("build", "-trimpath", "-ldflags", $LdFlags, "-o", $OutputFile)
+    if ($NormalizedTags) {
+        $BuildArgs += @("-tags", $NormalizedTags)
+    }
+    $BuildArgs += $SourcePath
 
     Write-Info "Building $Label ($TargetOS/$TargetArch) -> $OutputFile ..."
 
-    $Output = go build -trimpath -ldflags "$LdFlags" -o "$OutputFile" $SourcePath 2>&1
+    $Output = & go @BuildArgs 2>&1
 
     if ($LASTEXITCODE -eq 0 -and (Test-Path $OutputFile)) {
         $Size = [math]::Round((Get-Item $OutputFile).Length / 1MB, 2)

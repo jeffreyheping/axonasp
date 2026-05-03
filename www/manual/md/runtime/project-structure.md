@@ -2,7 +2,7 @@
 
 ## Overview
 
-AxonASP is a Go-based Classic ASP and VBScript execution runtime that provides multiple deployment modes. The project contains a shared VM/compiler core and multiple executable entry points for different use cases. All executables are built using the **build.ps1** (Windows) or **build.sh** (Linux/macOS) script and placed in the project root directory.
+AxonASP is a Go-based Classic ASP and VBScript/Javascript execution runtime that provides multiple deployment modes. The project contains a shared VM/compiler core and multiple executable entry points for different use cases. All executables are built using the **build.ps1** (Windows) or **build.sh** (Linux/macOS) script and placed in the project root directory.
 
 ## Building
 
@@ -42,6 +42,7 @@ axonasp2/
 ├── axonvm/                    # Core VM, compiler, and intrinsic objects
 │   ├── asp/                   # ASP intrinsic objects (Request, Response, Session, etc.)
 │   ├── lib_*.go               # Native object libraries (ADODB, MSXML, FSO, G3*, etc.)
+│   ├── lib_*_disabled.go      # Disabled native object libraries (stubs that return errors)
 │   ├── compiler*.go           # Single-pass compiler emitting bytecode
 │   ├── vm.go                  # Stack-based virtual machine execution
 │   ├── opcode.go              # VM opcodes and bytecode definitions

@@ -103,8 +103,8 @@ func NewFastCGIHost(w http.ResponseWriter, r *http.Request) *FastCGIHost {
 	host.server.SetRequestPath(scriptName)
 	_ = host.server.SetScriptTimeout(ScriptTimeout)
 
-	for key, values := range r.URL.Query() {
-		host.request.QueryString.AddValues(key, values)
+	if len(r.URL.RawQuery) > 0 {
+		host.request.QueryString.SetLazyPayload([]byte(r.URL.RawQuery))
 	}
 
 	host.request.SetBodyLoader(func() ([]byte, error) {
@@ -116,15 +116,6 @@ func NewFastCGIHost(w http.ResponseWriter, r *http.Request) *FastCGIHost {
 			return nil, err
 		}
 		return loadedBody, nil
-	})
-	host.request.SetFormLoader(func() (map[string][]string, error) {
-		if r.Method != http.MethodPost {
-			return map[string][]string{}, nil
-		}
-		if err := r.ParseForm(); err != nil {
-			return nil, err
-		}
-		return r.PostForm, nil
 	})
 
 	for _, cookie := range r.Cookies() {

@@ -1,3 +1,5 @@
+//go:build windows && !lib_mswc_disabled
+
 /*
  * AxonASP Server
  * Copyright (C) 2026 G3pix Ltda. All rights reserved.
@@ -21,9 +23,10 @@
 package axonvm
 
 import (
-	"golang.org/x/sys/windows"
 	"path/filepath"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 func getFileOwnerName(path string) string {

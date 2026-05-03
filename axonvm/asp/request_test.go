@@ -20,7 +20,10 @@
  */
 package asp
 
-import "testing"
+import (
+	"net/http"
+	"testing"
+)
 
 // TestRequestLookupOrder verifies ASP default lookup order across request collections.
 func TestRequestLookupOrder(t *testing.T) {
@@ -74,5 +77,80 @@ func TestRequestBinaryRead(t *testing.T) {
 	part3 := req.BinaryRead(1)
 	if len(part3) != 0 {
 		t.Fatalf("expected EOF empty read")
+	}
+}
+
+// TestRequestCollectionLazyPayload verifies URL-encoded payload parsing stays lazy and map-free.
+func TestRequestCollectionLazyPayload(t *testing.T) {
+	collection := NewRequestCollection()
+	collection.SetLazyPayload([]byte("Name=Ada&name=Lovelace&lang=en&empty=&encoded=hello+world&plus=%2B"))
+
+	if got := collection.Get("NAME"); got != "Ada, Lovelace" {
+		t.Fatalf("expected case-insensitive joined value, got %q", got)
+	}
+	if got := collection.Get("encoded"); got != "hello world" {
+		t.Fatalf("expected plus decoding, got %q", got)
+	}
+	if got := collection.Get("plus"); got != "+" {
+		t.Fatalf("expected percent decoding, got %q", got)
+	}
+	if got := collection.Get("empty"); got != "" {
+		t.Fatalf("expected empty value, got %q", got)
+	}
+
+	if !collection.Exists("lang") {
+		t.Fatalf("expected lang key to exist")
+	}
+	if collection.Count() != 5 {
+		t.Fatalf("expected 5 unique keys, got %d", collection.Count())
+	}
+
+	if key := collection.Key(1); key != "name" {
+		t.Fatalf("expected first key name, got %q", key)
+	}
+	if value := collection.GetByIndex(1); value != "Ada, Lovelace" {
+		t.Fatalf("expected first value Ada, Lovelace, got %q", value)
+	}
+
+	if len(collection.data) != 0 || len(collection.keys) != 0 {
+		t.Fatalf("lazy payload should not materialize eager map/slice structures")
+	}
+}
+
+// TestRequestFormLazyLoadUsesBodyPayload verifies Form reads parse body payload lazily without map materialization.
+func TestRequestFormLazyLoadUsesBodyPayload(t *testing.T) {
+	req := NewRequest()
+	httpReq := &http.Request{Header: make(http.Header)}
+	httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
+	req.SetHTTPRequest(httpReq)
+	req.SetBodyLoader(func() ([]byte, error) {
+		return []byte("city=Recife&city=Olinda&zip=50000-000"), nil
+	})
+
+	if got := req.Form.Get("city"); got != "Recife, Olinda" {
+		t.Fatalf("expected city values, got %q", got)
+	}
+	if got := req.Form.Get("zip"); got != "50000-000" {
+		t.Fatalf("expected zip value, got %q", got)
+	}
+
+	if len(req.Form.data) != 0 || len(req.Form.keys) != 0 {
+		t.Fatalf("form lazy payload should not materialize eager map/slice structures")
+	}
+}
+
+// TestRequestCollectionLazyPayloadUnicodeFold verifies Unicode case-insensitive key matching parity.
+func TestRequestCollectionLazyPayloadUnicodeFold(t *testing.T) {
+	collection := NewRequestCollection()
+	collection.SetLazyPayload([]byte("%C3%84pfel=1&%C3%A4PFEL=2&STRA%C3%9FE=x&stra%C3%9Fe=y"))
+
+	if got := collection.Get("äPFEL"); got != "1, 2" {
+		t.Fatalf("expected Unicode-folded key merge for äpfel, got %q", got)
+	}
+	if got := collection.Get("straße"); got != "x, y" {
+		t.Fatalf("expected Unicode-folded key merge for straße, got %q", got)
+	}
+	if collection.Count() != 2 {
+		t.Fatalf("expected 2 unique Unicode-folded keys, got %d", collection.Count())
 	}
 }

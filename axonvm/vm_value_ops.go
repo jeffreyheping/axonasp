@@ -28,11 +28,6 @@ import (
 	"g3pix.com.br/axonasp/vbscript"
 )
 
-// isObjectReferenceValue reports whether a value is a valid object reference for Is/Is Not.
-func isObjectReferenceValue(v Value) bool {
-	return v.Type == VTObject || v.Type == VTNativeObject
-}
-
 // isNull reports whether the value is VBScript Null.
 func isNull(v Value) bool {
 	return v.Type == VTNull

@@ -18,10 +18,10 @@
 The AxonASP project is a high-performance web server and Virtual Machine designed to run Classic ASP in GoLang. The Agent must understand the following mechanics:
 
 * **Lexer (`vbscript/`):** Operates in `ModeVBScript` and `ModeASP`. It identifies ASP delimiters (`<% %>`, `<%= %>`, `<%@ %>`), `<script runat="server">`, and `#include` directives.
-* **Single-Pass Compiler:** It reads tokens from the Lexer and *directly emits opcodes* (bytecode). It completely skips the AST phase to maximize compilation speed and reduce memory footprint.
+* **Single-Pass Compiler:** It reads tokens from the Lexer and *directly emits opcodes* (bytecode). It completely skips the AST phase to maximize compilation speed and reduce memory footprint. Avoid the use of regex if possible.
 * **Stack-Based VM (`axonvm/`):** Executes the bytecode using a static stack (`StackSize = 4096`).
-* **The `Value` Struct:** Instead of Go interfaces, the VM uses an efficient, tagged `Value` struct (handling Type, Num, Flt, Str, Arr). Type coercion follows the VM's existing logic.
-* **Native Object Mapping:** Native objects (like libraries) are passed around as `Value{Type: VTNativeObject, Num: dynamicID}`. Method routing uses fast O(1) string-matching or `strings.EqualFold` switches, entirely avoiding reflection.
+* **The `Value` Struct:** Instead of Go interfaces, the VM uses an efficient, tagged `Value` struct (handling Type, Num, Flt, Str, Arr). Type coercion follows the VM's existing logic. 
+* **Native Object Mapping:** Native objects (like libraries) are passed around as `Value{Type: VTNativeObject, Num: dynamicID}`. Method routing uses fast O(1) string-matching or `strings.EqualFold` switches, entirely avoiding reflection. 
 
 ---
 
@@ -32,7 +32,7 @@ We are currently building out the JScript (ECMAScript 5) execution engine alongs
 * **AST is Required:** Unlike VBScript, JScript compilation utilizes an Abstract Syntax Tree (AST). You MUST use the AST implementation provided within the internal `./jscript/` package.
 * **Strictly Internal (`./jscript/`):** Refer to the `README.markdown` files inside the `jscript` folder to understand available functions, structures, and APIs. Do not reinvent the wheel if something is already documented there.
 * **ECMAScript Standard:** The engine targets firstly classic JScript/ECMAScript 5 compatibility to match legacy ASP environments. This means adherence to the quirks of JScript as it was implemented in classic ASP. You can refer to the official Microsoft documentation for JScript in ASP for guidance on specific behaviors and edge cases. Keep the possibility to implement ES6 features. Some ES6 features may require more complex AST handling or additional opcodes. Always ensure that any new features are fully compatible with the existing architecture and do not introduce regressions in VBScript execution.
-* **Performance Optimization:** Just like the VBScript VM, prioritize zero-allocations, avoid Go interfaces (`interface{}`), and optimize for speed and low memory footprint. Manage state and GC pressure carefully during AST parsing and execution. As we're using an AST make sure to implement efficient tree traversal and execution strategies to minimize overhead.
+* **Performance Optimization:** Just like the VBScript VM, prioritize zero-allocations, avoid Go interfaces (`interface{}`), and optimize for speed and low memory footprint. Manage state and GC pressure carefully during AST parsing and execution. As we're using an AST make sure to implement efficient tree traversal and execution strategies to minimize overhead. Avoid the use of regex if possible.
 
 ---
 
@@ -46,6 +46,7 @@ All work occurs within the `axonasp2` directory structure:
 * `axonvm/asp/`: ASP Intrinsic Objects (`Response`, `Request`, `Server`, `Session`, `Application`, `ASPError`).
     * `axonvm/asp/axon/`: Built-in AxonServer Functions ("Ax" functions).
 * `axonvm/lib_<name>.go`: Implementations for `Server.CreateObject("<library>")`.
+* `axonvm/lib_<name>_disabled.go`: Implementations for `Server.CreateObject("<library>")` when the library is disabled via build tags.
 * `axonvm/builtins.go`: Native VBScript function registry with deterministic indexing.
 * `cli/`, `server/`, `fastcgiserver/`, `testsuite/`: Executable entry points (Interactive CLI, HTTP Server, FastCGI Server, Test Suite).
 * `www/tests/`: ASP code tests.
@@ -64,12 +65,13 @@ All work occurs within the `axonasp2` directory structure:
 * **File Loading:** RESX and INC files CANNOT be loaded directly; they must always be loaded through an ASP page.
 
 ### 2. State & Configuration
-* **State Management:** Sessions are stored in `temp/session` (Cookie: `ASPSESSIONID`). Application state is stored in memory.
-* **Configuration:** Use `viper` for config files (`./config/axonasp.toml`) and enable `.env` support. If you add a new configuration, add it to the documentation and provide a default value in `config/axonasp.toml`, following the file conventions and comentaries.
+* **State Management:** Sessions are stored in `temp/session` (Cookie: `ASPSESSIONID`) using a binary format. Application state is stored in memory.
+* **Configuration:** Use `viper` for config files (`./config/axonasp.toml`) and enable `.env` support. If you add a new configuration, add it to the documentation and provide a default value in `config/axonasp.toml`, following the file conventions and explanation. Always use the axonconfig/loader.go to load the viper configuration and never create a new viper instance or load the configuration in a different way.
 
 ### 3. Error Handling
 * **VBScript/ASP Errors:** MUST use and return errors from `/vbscript/vberrorcodes.go`. Maintain Microsoft standard numbering and messages. Implement line, column, and filename tracking.
-* **Internal GoLang Errors:** Use `axonvm/axonvmerrorcodes.go` and the `axonvm.NewAxonASPError` function exclusively for VM/Server/CLI execution errors.
+* **Internal GoLang Errors:** Use `axonvm/axonvmerrorcodes.go` and the `axonvm.NewAxonASPError` function exclusively for Libraries/VM/Server/CLI execution errors.
+* **JScript Errors:** Use `jscript/jscripterrorcodes.go` for JScript-specific errors.
 * **Error Propagation:** Ensure that all errors propagate correctly through the VM and are accessible via `ASPError` intrinsic object properties.
 * **ALWAYS** implement comprehensive error handling for all edge cases, including type mismatches, argument count errors, and runtime exceptions.
 * **Library Error Discipline:** Native libraries and custom objects must not silently return `Empty` for operational failures (I/O, provider/database failures, invalid object state, buffer/stream misuse, timeout/resource guard hits). Raise an explicit VBScript/JScript/ASP or AxonASP error instead, and only return `Empty` for documented compatibility cases where Classic ASP truly does so.
@@ -123,7 +125,7 @@ All work occurs within the `axonasp2` directory structure:
 ---
 
 # ASP CODING GUIDELINES 
-** PRIMARY RULE:** All ASP code must  adhere to the legacy Microsoft IIS standards for Classic ASP and VBScript. This ensures maximum compatibility, performance, and stability across all implementations (HTTP Server, FastCGI, CLI). Always follow the exact syntax rules, control structure requirements, variable declaration norms, object assignment protocols, and method/function calling conventions outlined in the official documentation. Avoid modern programming shortcuts or patterns that are not supported by Classic ASP's VBScript engine. When writing ASP code, prioritize clarity, correctness, and adherence to these strict guidelines to maintain the integrity of the AxonASP system. You're free to use the custom objects like G3JSON, G3DB, G3FILES, G3AXON.FUNCTIONS, G3TEMPLATE, G3ZIP, G3PDF,G3MD, G3MAIN, G3IMAGE, G3FC, G3CRYPTO, G3FILEUPLOADER, G3HTTP, G3TAR, G3ZIP, G3ZLIB, G3ZSTD and always should try to use them if their function is already implemented, avoiding recreating their function in pure ASP. If you need you can also check the file `www\manual\md\authoring\llm-classic-asp-coding.md` for a comprehensive set of rules and examples to ensure your ASP code is fully compliant with the original Microsoft IIS standards and AxonASP expected code.
+** PRIMARY RULE:** All ASP code must  adhere to the legacy Microsoft IIS standards for Classic ASP and VBScript. This ensures maximum compatibility, performance, and stability across all implementations (HTTP Server, FastCGI, CLI). Always follow the syntax rules, control structure requirements, variable declaration norms, object assignment protocols, and method/function calling conventions outlined in the official documentation. Avoid modern programming shortcuts or patterns that are not supported by Classic ASP's VBScript engine. When writing ASP code, prioritize clarity, correctness, and adherence to these strict guidelines to maintain the integrity of the AxonASP system. You're free to use the custom objects like G3JSON, G3DB, G3FILES, G3AXON.FUNCTIONS, G3TEMPLATE, G3ZIP, G3PDF,G3MD, G3MAIN, G3IMAGE, G3FC, G3CRYPTO, G3FILEUPLOADER, G3HTTP, G3TAR, G3ZIP, G3ZLIB, G3ZSTD and always should try to use them if their function is already implemented, avoiding recreating their function in pure ASP. If you need you can also check the file `www\manual\md\authoring\llm-classic-asp-coding.md` for a comprehensive set of rules and examples to ensure your ASP code is fully compliant with the original Microsoft IIS standards and AxonASP expected code.
 
 ---
 

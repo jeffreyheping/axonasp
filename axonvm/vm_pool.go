@@ -249,8 +249,7 @@ func (vm *VM) captureBaseProgramState() {
 	vm.baseOptionCompare = vm.optionCompare
 	vm.baseOptionExplicit = vm.optionExplicit
 	vm.baseGlobalNames = vm.globalNames
-	vm.baseGlobalNamesLower = vm.baseGlobalNamesLower
-	vm.baseGlobalNamesHash = vm.globalNamesHash
+	vm.baseGlobalNamesHash = hashStringSliceFNV1a(vm.baseGlobalNames)
 
 	if vm.baseGlobalZeroArgFuncs == nil {
 		vm.baseGlobalZeroArgFuncs = make(map[string]bool, len(vm.globalZeroArgFuncs))
@@ -307,7 +306,7 @@ func (vm *VM) resetForReuse() {
 	// will allocate a new backing array because baseGlobalNames has cap == len.
 	vm.globalNames = vm.baseGlobalNames
 
-	vm.globalNamesHash = vm.globalNamesHash
+	vm.globalNamesHash = hashStringSliceFNV1a(vm.globalNames)
 	vm.runtimeClassVersion = vm.baseRuntimeClassVersion
 	vm.rebuildGlobalNameIndex()
 

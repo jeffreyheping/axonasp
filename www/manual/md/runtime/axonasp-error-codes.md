@@ -357,3 +357,115 @@ The following error codes follow the standard VBScript specification. They are s
 - **VBScript error codes** are defined in `vbscript/vberrorcodes.go`. They are raised during script execution and are directly accessible via `Err.Number` and `Err.Description` inside an `On Error Resume Next` block.
 - The HRESULT hexadecimal form of VBScript errors follows the standard COM convention: `HRESULT = 0x800A0000 + decimal_code`. This value is what COM-aware environments and some external debugging tools report. AxonASP itself always exposes the short decimal form through `Err.Number`.
 - The error codes `32766` (True) and `32767` (False) are compatibility constants and are not raised as operational errors.
+
+---
+
+## AxonASP Addendum: Missing Internal Codes
+
+The following AxonASP code is also defined in the engine and must be included in runtime troubleshooting references.
+
+### Script and AxonVM (4000–4012)
+
+| Code | Description |
+|------|-------------|
+| 4012 | The requested library is disabled and was not compiled into this AxonASP executable. |
+
+---
+
+## JScript Error Codes
+
+The following codes are defined by the AxonASP JScript engine in `jscript/jscripterrorcodes.go`.
+
+### JScript Standard Runtime and Syntax Errors
+
+| Decimal | Description |
+|---------|-------------|
+| 5 | Invalid procedure call or argument |
+| 6 | Overflow |
+| 7 | Out of memory |
+| 9 | Subscript out of range |
+| 10 | This array is fixed or temporarily locked |
+| 11 | Division by zero |
+| 13 | Type mismatch |
+| 14 | Out of string space |
+| 17 | Can't perform requested operation |
+| 28 | Out of stack space |
+| 35 | Sub or Function not defined |
+| 48 | Error in loading DLL |
+| 51 | Internal error |
+| 52 | Bad file name or number |
+| 53 | File not found |
+| 54 | Bad file mode |
+| 55 | File already open |
+| 57 | Device I/O error |
+| 58 | File already exists |
+| 61 | Disk full |
+| 62 | Input past end of file |
+| 67 | Too many files |
+| 68 | Device unavailable |
+| 70 | Permission denied |
+| 71 | Disk not ready |
+| 74 | Can't rename with different drive |
+| 75 | Path/File access error |
+| 76 | Path not found |
+| 91 | Object variable or With block variable not set |
+| 92 | For loop not initialized |
+| 94 | Invalid use of Null |
+| 322 | Can't create necessary temporary file |
+| 424 | Object required |
+| 429 | Automation server can't create object |
+| 430 | Class doesn't support Automation |
+| 432 | File name or class name not found during Automation operation |
+| 438 | Object doesn't support this property or method |
+| 440 | Automation error |
+| 445 | Object doesn't support this action |
+| 446 | Object doesn't support named arguments |
+| 447 | Object doesn't support current locale setting |
+| 448 | Named argument not found |
+| 449 | Argument not optional |
+| 450 | Wrong number of arguments or invalid property assignment |
+| 451 | Object not a collection |
+| 453 | Specified DLL function not found |
+| 458 | Variable uses an Automation type not supported in JScript |
+| 462 | The remote server machine does not exist or is unavailable |
+| 501 | Cannot assign to variable |
+| 502 | Object not safe for scripting |
+| 503 | Object not safe for initializing |
+| 504 | Object not safe for creating |
+| 507 | An exception occurred |
+| 1002 | Syntax error |
+
+### JScript 5000+ Specific Errors
+
+| Decimal | Description |
+|---------|-------------|
+| 5000 | Cannot assign to 'this' |
+| 5001 | Number expected |
+| 5002 | Function expected |
+| 5003 | Cannot assign to a function result |
+| 5004 | Cannot index object |
+| 5005 | String expected |
+| 5006 | Date object expected |
+| 5007 | Object expected |
+| 5008 | Illegal assignment |
+| 5009 | Undefined identifier |
+| 5010 | Boolean expected |
+| 5011 | Can't execute code from a freed script |
+| 5012 | Object member expected |
+| 5013 | VBArray expected |
+| 5014 | JScript object expected |
+| 5015 | Enumerator object expected |
+| 5016 | Regular Expression object expected |
+| 5017 | Syntax error in regular expression |
+| 5018 | Unexpected quantifier |
+| 5019 | Expected ']' in regular expression |
+| 5020 | Expected ')' in regular expression |
+| 5021 | Invalid range in character set |
+| 5022 | Exception thrown and not caught |
+| 5023 | Function does not have a valid prototype object |
+
+### JScript Remarks
+
+- JScript errors are distinct from VBScript errors even when some decimal values overlap.
+- JScript code paths should resolve descriptions from `jscript/jscripterrorcodes.go`.
+- JScript runtime and parser failures can be surfaced through runtime error reporting in ASP hosts, CLI, FastCGI, and HTTP server modes.

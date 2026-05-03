@@ -799,4 +799,3 @@ func TestBuiltinTimeFormatting(t *testing.T) {
 		t.Fatalf("expected Now() string to include both date and time, got %q", nowStr)
 	}
 }
-

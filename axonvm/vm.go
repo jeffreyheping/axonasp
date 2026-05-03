@@ -1568,25 +1568,25 @@ aspExecLoop:
 		case OpIsRef:
 			a := vm.stack[vm.sp-1]
 			b := vm.stack[vm.sp]
-			if !isObjectReferenceValue(a) || !isObjectReferenceValue(b) {
+			if !IsObjectReferenceValue(a) || !IsObjectReferenceValue(b) {
 				vm.raise(vbscript.TypeMismatch, vbscript.TypeMismatch.String())
 				vm.stack[vm.sp-1] = NewEmpty()
 				vm.sp--
 				continue
 			}
-			vm.stack[vm.sp-1] = NewBool(a.Num == b.Num)
+			vm.stack[vm.sp-1] = NewBool(a.Type == b.Type && a.Num == b.Num)
 			vm.sp--
 
 		case OpIsNotRef:
 			a := vm.stack[vm.sp-1]
 			b := vm.stack[vm.sp]
-			if !isObjectReferenceValue(a) || !isObjectReferenceValue(b) {
+			if !IsObjectReferenceValue(a) || !IsObjectReferenceValue(b) {
 				vm.raise(vbscript.TypeMismatch, vbscript.TypeMismatch.String())
 				vm.stack[vm.sp-1] = NewEmpty()
 				vm.sp--
 				continue
 			}
-			vm.stack[vm.sp-1] = NewBool(a.Num != b.Num)
+			vm.stack[vm.sp-1] = NewBool(a.Type != b.Type || a.Num != b.Num)
 			vm.sp--
 
 		case OpGt:
@@ -1780,7 +1780,7 @@ aspExecLoop:
 					vm.stringWorkBuffer = append(vm.stringWorkBuffer, vm.valueToString(parts[i])...)
 				}
 				if len(vm.stringWorkBuffer) > 0 {
-					io.WriteString(vm.output, string(vm.stringWorkBuffer))
+					_, _ = vm.output.Write(vm.stringWorkBuffer)
 				}
 			} else {
 				// Drain stack even if output is nil.

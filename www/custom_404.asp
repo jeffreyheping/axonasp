@@ -86,7 +86,7 @@ Response.ContentType = "text/html"
                 <a href="/" class="btn-link">Go to Homepage</a>
 
                 <div class="footer">
-                    &copy; 2026 G3pix Ltda. AxonASP Server. All rights
+                    &copy; 2026 G3Pix ❖ AxonASP. All rights
                     reserved.<br />
                     For technical support, visit
                     <a href="https://g3pix.com.br/axonasp"

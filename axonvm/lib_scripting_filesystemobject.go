@@ -1,3 +1,5 @@
+//go:build !lib_scripting_filesystemobject_disabled
+
 /*
  * AxonASP Server
  * Copyright (C) 2026 G3pix Ltda. All rights reserved.

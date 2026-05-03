@@ -27,6 +27,7 @@ PLATFORM="linux"
 ARCHITECTURE="amd64"
 CLEAN=0
 TEST=0
+TAGS=""
 
 # --- Argument Parsing ---
 while [[ "$#" -gt 0 ]]; do
@@ -35,10 +36,14 @@ while [[ "$#" -gt 0 ]]; do
         --arch|-a) ARCHITECTURE="$2"; shift ;;
         --clean|-c) CLEAN=1 ;;
         --test|-t) TEST=1 ;;
+        --tags|-g) TAGS="$2"; shift ;;
         *) echo -e "\033[0;31mUnknown parameter passed: $1\033[0m"; exit 1 ;;
     esac
     shift
 done
+
+# Normalize Go build tags so users can pass comma/semicolon/space-separated values.
+NORMALIZED_TAGS=$(echo "$TAGS" | tr ',;' '  ' | xargs)
 
 # --- Validate Parameters ---
 if [[ ! "$PLATFORM" =~ ^(windows|linux|darwin|all)$ ]]; then
@@ -96,6 +101,9 @@ echo ""
 echo -e "${MAGENTA}=======================================================${NC}"
 echo -e " ${WHITE} G3Pix ❖ AxonASP Build Script${NC}"
 echo -e " ${CYAN} Version: $FULL_VERSION${NC}"
+if [ -n "$NORMALIZED_TAGS" ]; then
+    echo -e " ${YELLOW} Build Tags: $NORMALIZED_TAGS${NC}"
+fi
 echo -e "${MAGENTA}=======================================================${NC}"
 echo ""
 
@@ -136,12 +144,17 @@ build_binary() {
 
     local output_file="${output_name}${extension}"
     local ldflags="-X main.Version=$FULL_VERSION"
+    local build_args=(build -trimpath -ldflags "$ldflags" -o "$output_file")
+    if [ -n "$NORMALIZED_TAGS" ]; then
+        build_args+=(-tags "$NORMALIZED_TAGS")
+    fi
+    build_args+=("$source_path")
 
     write_info "Building $label ($target_os/$target_arch) -> $output_file ..."
 
     # Build and capture output
     local build_output
-    build_output=$(go build -trimpath -ldflags "$ldflags" -o "$output_file" "$source_path" 2>&1)
+    build_output=$(go "${build_args[@]}" 2>&1)
     local exit_code=$?
 
     if [ $exit_code -eq 0 ] && [ -f "$output_file" ]; then

@@ -2,7 +2,7 @@
 
 ## Overview
 
-AxonASP is a modern execution engine for Classic ASP and VBScript, implemented in Go and designed for high compatibility, high throughput, and long-term maintainability.
+AxonASP is a modern execution engine for Classic ASP with support for VBScript and JScript, implemented in Go and designed for high compatibility, high throughput, and long-term maintainability.
 
 This document explains how AxonASP works internally so that developers and automation agents can implement new runtime features, native libraries, and compatibility behaviors with confidence.
 
@@ -13,13 +13,13 @@ This document explains how AxonASP works internally so that developers and autom
 AxonASP started from a practical risk: once VBScript deprecation was announced by Microsoft, long-term support for Classic ASP became uncertain.
 
 The project mission is straightforward:
-- Keep Classic ASP alive for production workloads.
+- Keep Classic ASP alive for production workloads, with support to VBScript and JavaScript(JScript) dialects.
 - Preserve historical behavior where compatibility matters.
 - Evolve the platform with modern capabilities without breaking legacy applications.
 
 AxonASP modernizes the ecosystem by providing:
 - Cross-platform execution on Windows, Linux, and macOS.
-- Multiple runtime modes: HTTP server, FastCGI server, CLI interpreter, and MCP server.
+- Multiple runtime modes: HTTP server, FastCGI server, CLI interpreter, Test Suite, and MCP server.
 - Modern developer workflows through CLI and TUI-style interactive execution, plus MCP integration for model-assisted development and web application maintenance.
 
 ---
@@ -35,7 +35,14 @@ AxonASP executes ASP/VBScript through a direct lexer-to-bytecode pipeline:
 3. Stack-based VM executes bytecode against a typed `Value` model.
 4. Intrinsic ASP objects and native libraries are dispatched through VM-native object routing.
 
-This architecture removes AST construction overhead and minimizes intermediate allocations.
+This architecture removes AST construction overhead in VBScript and minimizes intermediate allocations.
+
+For the JavaScript (JScript) dialect that implements support to ECMAScript 5.0 standards, AxonASP execute ASP/JScript through an AST:
+1. Source is parsed into an AST by the JScript parser in `jscript/`.
+2. AST is traversed and compiled to emit bytecode for the VM.
+3. Stack-based VM executes bytecode against the same typed `Value` model, with JScript-specific semantics.
+4. Intrinsic ASP objects and native libraries are dispatched through VM-native object routing.
+
 
 ## Runtime Modes Share One Core
 
@@ -44,6 +51,7 @@ The following executables reuse the same compiler/VM core in `axonvm/`:
 - FastCGI server (`fastcgi/`)
 - CLI (`cli/`)
 - MCP server (`mcp/`)
+- Test suite runner (`testsuite/`)
 
 Feature parity is expected across all modes.
 
@@ -76,7 +84,7 @@ The VM value model (`Value`) is a tagged struct that avoids generic boxed object
 
 ---
 
-## Compiler Architecture (No AST Rule)
+## VBScript Compiler Architecture (No AST Rule)
 
 ## Rule: No AST
 
@@ -87,7 +95,7 @@ Instead, the compiler performs immediate bytecode emission while reading tokens.
 - Memory profile
 - Throughput under dynamic script generation workloads
 
-## What Replaces AST
+## What Replaces AST in VBScript
 
 The compiler uses:
 - Token stream parsing with direct opcode emission.
@@ -229,20 +237,22 @@ Object lifetimes are tied to VM/request execution context and reference behavior
 ## Add a New Native Library (Recommended Pattern)
 
 1. Create `axonvm/lib_<name>.go` with a concrete struct.
-2. Implement strongly typed dispatch members:
+2. Implement a `axonvm/lib_<name>_disabled.go` stub that returns errors for all dispatches, and gate it behind a build tag for opt-in disabling.
+3. Implement strongly typed dispatch members:
    - `DispatchMethod(methodName string, args []Value) Value`
    - `DispatchPropertyGet(propertyName string) Value`
    - Optional property set handler when writable members exist.
-3. Register object map in VM state.
-4. Integrate ProgID creation in VM native call routing.
-5. Route method/property dispatch for that dynamic ID space.
-6. Use `Value` constructors (`NewString`, `NewInteger`, `NewBool`, etc.) consistently.
-7. Raise standardized runtime errors for invalid args/state instead of silent `Empty` on operational failures.
+4. Register object map in VM state.
+5. Integrate ProgID creation in VM native call routing.
+6. Route method/property dispatch for that dynamic ID space.
+7. Use `Value` constructors (`NewString`, `NewInteger`, `NewBool`, etc.) consistently.
+8. Raise standardized runtime errors for invalid args/state instead of silent `Empty` on operational failures.
+
 
 ## Add Compiler/VM Features Safely
 
 When adding language features or compatibility behavior:
-- Preserve no-AST direct emission architecture.
+- Preserve no-AST direct emission architecture for VBScript and avoid introducing AST construction in the JScript path unless necessary for ECMAScript compliance.
 - Add opcodes only when necessary and wire full lifecycle (emit + execute + error handling).
 - Keep compatibility semantics explicit in compiler emission rules.
 - Verify parity in HTTP, FastCGI, CLI, and MCP execution paths.
@@ -258,6 +268,7 @@ Start here for architecture work:
 - `axonvm/value.go` - Variant representation and value helpers.
 - `axonvm/compiler*.go` - Token-to-bytecode direct emission logic.
 - `vbscript/` - Lexer and VBScript token definitions/errors.
+- `jscript/` - JScript parser and AST definitions.
 - `axonvm/lib_*.go` - Native library implementations.
 
 ---
@@ -266,7 +277,7 @@ Start here for architecture work:
 
 AxonASP is built around four non-negotiable principles:
 - Compatibility first for Classic ASP/VBScript behavior.
-- Single-pass no-AST compilation for speed and memory efficiency.
+- Single-pass no-AST compilation for speed and memory efficiency in VBScript.
 - Stack-based bytecode VM with strict typed-value runtime.
 - Native Go extensions exposed as ASP objects without reflection-heavy dispatch.
 

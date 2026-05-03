@@ -1,3 +1,5 @@
+//go:build !lib_adodb_stream_disabled
+
 /*
  * AxonASP Server
  * Copyright (C) 2026 G3pix Ltda. All rights reserved.

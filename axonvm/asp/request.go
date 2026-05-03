@@ -28,6 +28,16 @@ import (
 	"sync"
 )
 
+type requestKVRange struct {
+	start int
+	end   int
+}
+
+type requestKVPair struct {
+	key   requestKVRange
+	value requestKVRange
+}
+
 // RequestCollectionValue stores values and optional cookie-style subkeys.
 type RequestCollectionValue struct {
 	Values     []string
@@ -100,6 +110,11 @@ func (v RequestCollectionValue) HasKeys() bool {
 type RequestCollection struct {
 	data     map[string]RequestCollectionValue
 	keys     []string
+	lazyData []byte
+	lazyKV   []requestKVPair
+	lazyKeys []string
+	lazySet  []bool
+	lazyInit bool
 	mu       sync.RWMutex
 	onAccess func()
 }
@@ -127,6 +142,18 @@ func (c *RequestCollection) AddValues(key string, values []string) {
 		c.keys = append(c.keys, normalizedKey)
 	}
 	c.data[normalizedKey] = NewRequestCollectionValue(values)
+}
+
+// SetLazyPayload configures one URL-encoded payload parsed on-demand using byte offsets.
+func (c *RequestCollection) SetLazyPayload(payload []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.lazyData = payload
+	c.lazyKV = c.lazyKV[:0]
+	c.lazyKeys = c.lazyKeys[:0]
+	c.lazySet = c.lazySet[:0]
+	c.lazyInit = false
 }
 
 // AddCookie stores one cookie value and parses subkeys when present.
@@ -161,35 +188,58 @@ func (c *RequestCollection) notifyAccess() {
 func (c *RequestCollection) Get(key string) string {
 	c.notifyAccess()
 
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.ensureLazyParsedLocked()
 
 	value, exists := c.data[strings.ToLower(key)]
-	if !exists {
+	if exists {
+		return value.Joined()
+	}
+
+	joined, ok := c.lazyJoinedValueLocked(key)
+	if !ok {
 		return ""
 	}
-	return value.Joined()
+	return joined
 }
 
 // GetValue returns the full structured value for one key.
 func (c *RequestCollection) GetValue(key string) (RequestCollectionValue, bool) {
 	c.notifyAccess()
 
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.ensureLazyParsedLocked()
 
 	value, exists := c.data[strings.ToLower(key)]
-	return value, exists
+	if exists {
+		return value, true
+	}
+
+	lazyValues := c.lazyValuesForKeyLocked(key)
+	if len(lazyValues) == 0 {
+		return RequestCollectionValue{}, false
+	}
+	return RequestCollectionValue{Values: lazyValues}, true
 }
 
 // Exists reports whether a key exists in the collection.
 func (c *RequestCollection) Exists(key string) bool {
 	c.notifyAccess()
 
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	_, exists := c.data[strings.ToLower(key)]
+	c.ensureLazyParsedLocked()
+
+	if _, exists := c.data[strings.ToLower(key)]; exists {
+		return true
+	}
+
+	_, exists := c.lazyJoinedValueLocked(key)
 	return exists
 }
 
@@ -197,48 +247,218 @@ func (c *RequestCollection) Exists(key string) bool {
 func (c *RequestCollection) Count() int {
 	c.notifyAccess()
 
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	return len(c.keys)
+	c.ensureLazyParsedLocked()
+
+	count := len(c.keys)
+	for i := 0; i < len(c.lazyKV); i++ {
+		if c.lazyKeyExistsInEagerLocked(c.lazyKV[i]) {
+			continue
+		}
+		if c.lazyHasSeenKeyBeforeLocked(i) {
+			continue
+		}
+		count++
+	}
+
+	return count
 }
 
 // Key returns one key by ASP-compatible 1-based index.
 func (c *RequestCollection) Key(index int) string {
 	c.notifyAccess()
 
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	if index < 1 || index > len(c.keys) {
-		return ""
-	}
-	return c.keys[index-1]
+	c.ensureLazyParsedLocked()
+
+	return c.keyByIndexLocked(index)
 }
 
 // GetByIndex returns one joined value by ASP-compatible 1-based index.
 func (c *RequestCollection) GetByIndex(index int) string {
 	c.notifyAccess()
 
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	if index < 1 || index > len(c.keys) {
+	c.ensureLazyParsedLocked()
+
+	key := c.keyByIndexLocked(index)
+	if key == "" {
 		return ""
 	}
-	key := c.keys[index-1]
-	return c.data[key].Joined()
+
+	if value, exists := c.data[key]; exists {
+		return value.Joined()
+	}
+
+	joined, ok := c.lazyJoinedValueLocked(key)
+	if !ok {
+		return ""
+	}
+	return joined
+}
+
+func (c *RequestCollection) keyByIndexLocked(index int) string {
+	if index < 1 {
+		return ""
+	}
+
+	if index <= len(c.keys) {
+		return c.keys[index-1]
+	}
+
+	remaining := index - len(c.keys)
+	for i := 0; i < len(c.lazyKV); i++ {
+		if c.lazyKeyExistsInEagerLocked(c.lazyKV[i]) {
+			continue
+		}
+		if c.lazyHasSeenKeyBeforeLocked(i) {
+			continue
+		}
+		remaining--
+		if remaining == 0 {
+			return strings.ToLower(c.decodeRangeLocked(c.lazyKV[i].key))
+		}
+	}
+
+	return ""
 }
 
 // GetKeys returns a snapshot of all keys in insertion order.
 func (c *RequestCollection) GetKeys() []string {
 	c.notifyAccess()
 
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	result := make([]string, len(c.keys))
-	copy(result, c.keys)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.ensureLazyParsedLocked()
+
+	result := make([]string, 0, len(c.keys)+len(c.lazyKV))
+	result = append(result, c.keys...)
+
+	for i := 0; i < len(c.lazyKV); i++ {
+		if c.lazyKeyExistsInEagerLocked(c.lazyKV[i]) {
+			continue
+		}
+		if c.lazyHasSeenKeyBeforeLocked(i) {
+			continue
+		}
+		result = append(result, strings.ToLower(c.decodeRangeLocked(c.lazyKV[i].key)))
+	}
+
 	return result
+}
+
+func (c *RequestCollection) ensureLazyParsedLocked() {
+	if c.lazyInit {
+		return
+	}
+	c.lazyKV = parseURLEncodedPairs(c.lazyData)
+	if cap(c.lazyKeys) < len(c.lazyKV) {
+		c.lazyKeys = make([]string, len(c.lazyKV))
+	} else {
+		c.lazyKeys = c.lazyKeys[:len(c.lazyKV)]
+	}
+	if cap(c.lazySet) < len(c.lazyKV) {
+		c.lazySet = make([]bool, len(c.lazyKV))
+	} else {
+		c.lazySet = c.lazySet[:len(c.lazyKV)]
+		for i := 0; i < len(c.lazySet); i++ {
+			c.lazySet[i] = false
+		}
+	}
+	c.lazyInit = true
+}
+
+func (c *RequestCollection) lazyJoinedValueLocked(key string) (string, bool) {
+	first := ""
+	matchCount := 0
+	var builder strings.Builder
+
+	for i := 0; i < len(c.lazyKV); i++ {
+		if !strings.EqualFold(c.lazyKeyAtLocked(i), key) {
+			continue
+		}
+		pair := c.lazyKV[i]
+
+		decoded := c.decodeRangeLocked(pair.value)
+		if matchCount == 0 {
+			first = decoded
+			matchCount = 1
+			continue
+		}
+
+		if matchCount == 1 {
+			builder.Grow(len(first) + len(decoded) + 2)
+			builder.WriteString(first)
+			builder.WriteString(", ")
+		} else {
+			builder.WriteString(", ")
+		}
+		builder.WriteString(decoded)
+		matchCount++
+	}
+
+	if matchCount == 0 {
+		return "", false
+	}
+	if matchCount == 1 {
+		return first, true
+	}
+	return builder.String(), true
+}
+
+func (c *RequestCollection) lazyValuesForKeyLocked(key string) []string {
+	values := make([]string, 0)
+	for i := 0; i < len(c.lazyKV); i++ {
+		if !strings.EqualFold(c.lazyKeyAtLocked(i), key) {
+			continue
+		}
+		pair := c.lazyKV[i]
+		values = append(values, c.decodeRangeLocked(pair.value))
+	}
+	return values
+}
+
+func (c *RequestCollection) lazyKeyExistsInEagerLocked(pair requestKVPair) bool {
+	decodedLower := strings.ToLower(c.decodeRangeLocked(pair.key))
+	_, exists := c.data[decodedLower]
+	return exists
+}
+
+func (c *RequestCollection) lazyHasSeenKeyBeforeLocked(current int) bool {
+	target := c.lazyKeyAtLocked(current)
+	for i := 0; i < current; i++ {
+		if strings.EqualFold(c.lazyKeyAtLocked(i), target) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *RequestCollection) lazyKeyAtLocked(index int) string {
+	if index < 0 || index >= len(c.lazyKV) {
+		return ""
+	}
+	if c.lazySet[index] {
+		return c.lazyKeys[index]
+	}
+	decoded := c.decodeRangeLocked(c.lazyKV[index].key)
+	c.lazyKeys[index] = decoded
+	c.lazySet[index] = true
+	return decoded
+}
+
+func (c *RequestCollection) decodeRangeLocked(r requestKVRange) string {
+	if r.start >= r.end || r.start < 0 || r.end > len(c.lazyData) {
+		return ""
+	}
+	return decodeURLEncodedSegment(c.lazyData, r)
 }
 
 // Request accesses data sent by the client (QueryString, Form, etc.).
@@ -536,8 +756,17 @@ func (r *Request) ensureFormLoaded() {
 				values = loaded
 			}
 		} else if req != nil {
-			if err := req.ParseForm(); err == nil {
-				values = req.PostForm
+			contentType := strings.ToLower(req.Header.Get("Content-Type"))
+			if strings.HasPrefix(contentType, "application/x-www-form-urlencoded") {
+				r.ensureBodyLoaded()
+				r.mu.RLock()
+				body := r.bodyBytes
+				r.mu.RUnlock()
+				r.Form.SetLazyPayload(body)
+			} else {
+				if err := req.ParseForm(); err == nil {
+					values = req.PostForm
+				}
 			}
 		}
 
@@ -630,4 +859,106 @@ func intToString(value int) string {
 		value /= 10
 	}
 	return string(digits[index:])
+}
+
+func parseURLEncodedPairs(payload []byte) []requestKVPair {
+	if len(payload) == 0 {
+		return nil
+	}
+
+	pairs := make([]requestKVPair, 0, 8)
+	segmentStart := 0
+	for i := 0; i <= len(payload); i++ {
+		if i < len(payload) && payload[i] != '&' {
+			continue
+		}
+
+		segmentEnd := i
+		if segmentEnd > segmentStart {
+			equals := -1
+			for j := segmentStart; j < segmentEnd; j++ {
+				if payload[j] == '=' {
+					equals = j
+					break
+				}
+			}
+
+			if equals < 0 {
+				if segmentEnd > segmentStart {
+					pairs = append(pairs, requestKVPair{
+						key:   requestKVRange{start: segmentStart, end: segmentEnd},
+						value: requestKVRange{start: segmentEnd, end: segmentEnd},
+					})
+				}
+			} else if equals > segmentStart {
+				pairs = append(pairs, requestKVPair{
+					key:   requestKVRange{start: segmentStart, end: equals},
+					value: requestKVRange{start: equals + 1, end: segmentEnd},
+				})
+			}
+		}
+
+		segmentStart = i + 1
+	}
+
+	return pairs
+}
+
+func decodeURLEncodedSegment(payload []byte, r requestKVRange) string {
+	if r.start >= r.end {
+		return ""
+	}
+
+	needsDecode := false
+	for i := r.start; i < r.end; i++ {
+		if payload[i] == '+' || payload[i] == '%' {
+			needsDecode = true
+			break
+		}
+	}
+
+	if !needsDecode {
+		return string(payload[r.start:r.end])
+	}
+
+	decoded := make([]byte, 0, r.end-r.start)
+	for i := r.start; i < r.end; {
+		value, consumed := decodeURLEncodedByte(payload, i, r.end)
+		decoded = append(decoded, value)
+		i += consumed
+	}
+
+	return string(decoded)
+}
+
+func decodeURLEncodedByte(payload []byte, index int, end int) (byte, int) {
+	if index >= end {
+		return 0, 1
+	}
+
+	current := payload[index]
+	if current == '+' {
+		return ' ', 1
+	}
+	if current == '%' && index+2 < end {
+		hi, hiOK := hexToNibble(payload[index+1])
+		lo, loOK := hexToNibble(payload[index+2])
+		if hiOK && loOK {
+			return (hi << 4) | lo, 3
+		}
+	}
+	return current, 1
+}
+
+func hexToNibble(b byte) (byte, bool) {
+	switch {
+	case b >= '0' && b <= '9':
+		return b - '0', true
+	case b >= 'a' && b <= 'f':
+		return b - 'a' + 10, true
+	case b >= 'A' && b <= 'F':
+		return b - 'A' + 10, true
+	default:
+		return 0, false
+	}
 }

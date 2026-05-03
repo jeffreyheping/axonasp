@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <b> Supercharge your legacy code. Build blazing-fast modern APIs. Experience Classic ASP like never before. </b>
+  <b> Supercharge your code. Build blazing-fast modern APIs. Experience Classic ASP like never before. </b>
   <br>
   Run your new and legacy ASP Classic applications with modern speed and cross-platform compatibility
 </p>
@@ -33,7 +33,7 @@ If you thought Classic ASP was dead, think again. AxonASP breathes raw power, mo
 We threw out the rulebook to achieve extreme performance improvements that will blow your mind:
 
 *   **Zero AST, Pure Bytecode:** The new VBScript compiler is single-pass and emits bytecode directly to a highly optimized, stack-based Virtual Machine. By eliminating the Abstract Syntax Tree (AST), AxonASP executes scripts with virtually zero-allocation overhead. It is insanely fast and memory optimized.
-*   **IIS-Style VM Pooling & Advanced Caching:** We've implemented an advanced VM pool modeled perfectly after IIS, combined with aggressive script caching and `eval`/`execute`/`executeglobal` compilation caching. Processing times are phenomenally accelerated and better than the Windows Server ASP engine in many cases.
+*   **IIS-Style VM Pooling & Advanced Caching:** We've implemented an advanced VM pool modeled perfectly after IIS, combined with aggressive script caching and `eval`/`execute`/`executeglobal` compilation caching. Processing times are phenomenally accelerated and better than the Windows Server ASP engine in most cases.
 *   **Standardization meets Innovation:** You get 99% adherence to Classic ASP and VBScript standards, meaning your legacy code drops right in. But we didn't stop there: we added over **60 custom Axon functions**, including advanced array manipulation, to make writing ASP a joy again, and full support to JavaScript code, that you can even mix with VBScript seamlessly.
 *   **Run ASP Anywhere:** Web server, FastCGI, or the command line! The brand new **CLI with TUI (Text User Interface)** allows you to execute ASP code directly from your terminal. This opens incredible possibilities: run scheduled ASP scripts as background jobs, cron tasks, and powerful system administration tools!
 *   **AI-Ready with MCP:** AxonASP includes a built-in Model Context Protocol (MCP) server. AI agents can now connect directly to your runtime, understand your specific environment, and autonomously author complete ASP pages utilizing all available native functions.
@@ -76,6 +76,7 @@ AxonASP extends Classic ASP with incredibly fast, zero-allocation native Go libr
 *   **G3FC:** Quickly find files and extract file metadata across complex directories.
 *   **G3MD:** Convert Markdown text into clean HTML instantly.
 *   **G3PDF:** Generate native PDF documents with text, shapes, and images.
+*   **G3SEARCH:** Perform advanced search operations across your data.
 *   **G3FILEUPLOADER:** Securely and easily handle multipart form data and file uploads.
 
 *(Check out `./www/manual/menu.md` and `./www/manual/md/` for full API details!)*
@@ -91,17 +92,36 @@ AxonASP is designed to be built and deployed in seconds, getting your applicatio
 *   Your existing ASP codebase (or explore our awesome examples in `/www/`)
 
 ### Building the Engine
-We provide robust, ready-to-use build scripts right in the root directory.
+We provide robust, ready-to-use build scripts right in the root directory. You can build for Windows, Linux, or macOS with a single command. The scripts also support passing Go compilation tags to disable specific libraries for leaner binaries.
 
 **Windows:**
 ```powershell
-.\build.ps1
+.\build.ps1 -Platform "windows" -Architecture "amd64"
 ```
 
 **Linux / macOS:**
 ```bash
-./build.sh
+./build.sh --platform "linux" --architecture "amd64"
 ```
+
+### Build with selected libraries only
+Use the build scripts to disable specific libraries. This is useful for leaner binaries or constrained environments. Use lib_<name>_disabled as the tag format. For example, to disable G3CRYPTO and G3HTTP, use lib_g3crypto_disabled and lib_g3http_disabled.
+
+**Windows (PowerShell):**
+```powershell
+./build.ps1 -Tags "lib_adodb_disabled lib_msxml_disabled"
+./build.ps1 -Tags "lib_g3image_disabled,lib_g3pdf_disabled"
+```
+
+**Linux / macOS (Bash):**
+```bash
+./build.sh --tags "lib_adodb_disabled lib_msxml_disabled"
+./build.sh --tags "lib_g3image_disabled,lib_g3pdf_disabled"
+```
+
+You can separate tags with spaces, commas, or semicolons in both scripts.
+
+For the complete list of supported disable tags and usage guidance, see the manual page at `www/manual/md/runtime/compilation-library-disable-tags.md`.
 
 **Experience the absolute pinnacle of Classic ASP execution. Dive into the manual at [./www/manual/md/](www/manual/md/) and start building today!**
 

@@ -41,6 +41,7 @@ const (
 	VTNativeObject
 	VTBuiltin
 	VTUserSub
+	VTNothing
 	// VTJSUndefined represents the JavaScript undefined primitive.
 	VTJSUndefined
 	// VTJSObject points to one dynamic JS object ID in VM jsObjectItems.
@@ -218,3 +219,8 @@ func (v Value) ArgRefIsClassMember() bool { return v.Flt == 2.0 }
 
 // ArgRefIdx returns the slot index encoded in a VTArgRef value.
 func (v Value) ArgRefIdx() int { return int(v.Num) }
+
+// IsObjectReferenceValue reports whether a value is a valid object reference for Is/Is Not.
+func IsObjectReferenceValue(v Value) bool {
+	return v.Type == VTObject || v.Type == VTNativeObject || v.Type == VTNothing
+}

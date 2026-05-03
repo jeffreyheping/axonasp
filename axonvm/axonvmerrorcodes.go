@@ -95,6 +95,7 @@ const (
 	ErrInteractiveFunctionNotSupportedInASP AxonASPErrorCode = 4009
 	ErrResponseBufferLimitExceeded          AxonASPErrorCode = 4010
 	ErrScriptTimeoutDetachedGoroutine       AxonASPErrorCode = 4011
+	ErrLibraryDisabled                      AxonASPErrorCode = 4012
 
 	ErrInvalidCacheVersion          AxonASPErrorCode = 5000
 	ErrInvalidCacheFile             AxonASPErrorCode = 5001
@@ -239,6 +240,7 @@ var AxonASPErrorMessages = map[AxonASPErrorCode]string{
 	ErrInteractiveFunctionNotSupportedInASP: "Interactive desktop functions are not supported in ASP server-side execution",
 	ErrResponseBufferLimitExceeded:          "Response buffer limit exceeded",
 	ErrScriptTimeoutDetachedGoroutine:       "Script timeout reached and execution goroutine was detached",
+	ErrLibraryDisabled:                      "The requested library was not compiled into this AxonASP executable. You must compile the server without the `lib_%s_disabled` build tag to enable it.",
 
 	// Cache
 	ErrInvalidCacheVersion:          "Invalid cache version",

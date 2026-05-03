@@ -25,7 +25,9 @@ import (
 	"math"
 	"math/rand"
 	"net/url"
+	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1284,8 +1286,8 @@ func vbsAxonEnumValues(vm *VM, args []Value) (Value, error) {
 	if err != nil {
 		return ValueFromVBArray(NewVBArrayFromValues(0, nil)), nil
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		return strings.ToLower(entries[i].Name()) < strings.ToLower(entries[j].Name())
+	slices.SortFunc(entries, func(a, b os.DirEntry) int {
+		return compareASCIINameFold(a.Name(), b.Name())
 	})
 
 	values := make([]Value, 0, len(entries))
@@ -1306,6 +1308,37 @@ func vbsAxonEnumValues(vm *VM, args []Value) (Value, error) {
 	}
 
 	return ValueFromVBArray(NewVBArrayFromValues(0, values)), nil
+}
+
+func compareASCIINameFold(left string, right string) int {
+	limit := len(left)
+	if len(right) < limit {
+		limit = len(right)
+	}
+	for i := 0; i < limit; i++ {
+		lb := toLowerASCIIByte(left[i])
+		rb := toLowerASCIIByte(right[i])
+		if lb < rb {
+			return -1
+		}
+		if lb > rb {
+			return 1
+		}
+	}
+	if len(left) < len(right) {
+		return -1
+	}
+	if len(left) > len(right) {
+		return 1
+	}
+	return 0
+}
+
+func toLowerASCIIByte(value byte) byte {
+	if value >= 'A' && value <= 'Z' {
+		return value + ('a' - 'A')
+	}
+	return value
 }
 
 // vbsAxonEnumCount returns the number of elements in a normalized enumerable array.

@@ -517,7 +517,10 @@ func TestVMRunReturnsScriptTimeout(t *testing.T) {
 
 // TestVMRunReturnsResponseBufferLimit verifies Response buffering overflow is surfaced as one AxonASP runtime error.
 func TestVMRunReturnsResponseBufferLimit(t *testing.T) {
-	compiler := NewASPCompiler(`<% Response.Write String(9, "A") %>`)
+	compiler := NewASPCompiler(`<%
+Response.Buffer = True
+Response.Write String(9, "A")
+%>`)
 	compiler.SetSourceName("buffer.asp")
 	if err := compiler.Compile(); err != nil {
 		t.Fatalf("compile failed: %v", err)
