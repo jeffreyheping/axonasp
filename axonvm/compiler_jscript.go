@@ -543,11 +543,19 @@ func (c *Compiler) compileJScriptForStatement(node *jsast.ForStatement) {
 
 	loopCtx.loopStart = len(c.bytecode)
 
-	// Compile test condition (jump out if false)
+	// Compile test condition (jump out if false).
+	// Use the fused OpJSJumpIfLessFast opcode for the extremely common pattern
+	// `identifier < numericLiteral`, which covers virtually all ascending for-loops.
+	// The fast opcode reads the variable directly from the JS environment and compares
+	// it to the stored constant without touching the stack.
 	var jumpExit int
 	if node.Test != nil {
-		c.compileJScriptExpression(node.Test)
-		jumpExit = c.emitJSJump(OpJSJumpIfFalse)
+		if fastNameIdx, fastLimitIdx, ok := c.detectJSForFastLessTest(node.Test); ok {
+			jumpExit = c.emitJSJumpIfLessFast(fastNameIdx, fastLimitIdx)
+		} else {
+			c.compileJScriptExpression(node.Test)
+			jumpExit = c.emitJSJump(OpJSJumpIfFalse)
+		}
 	}
 
 	// For let loops: enter per-iteration scope by copying loop vars into a child env frame
@@ -762,6 +770,52 @@ func (c *Compiler) compileJScriptSwitchStatement(node *jsast.SwitchStatement) {
 // emitJSJumpTo emits an unconditional jump to a specific absolute target.
 func (c *Compiler) emitJSJumpTo(op OpCode, target int) {
 	c.emit(op, target)
+}
+
+// detectJSForFastLessTest checks whether a JScript for-loop test expression has the
+// simple form `identifier < numericLiteral`.  If so, it interns the name and limit
+// as constants and returns their indices along with true.  This pattern covers the
+// overwhelming majority of ascending numeric for-loops.
+func (c *Compiler) detectJSForFastLessTest(test jsast.Expression) (nameIdx, limitIdx int, ok bool) {
+	bin, isBin := test.(*jsast.BinaryExpression)
+	if !isBin || bin.Operator != jstoken.LESS {
+		return 0, 0, false
+	}
+	id, isID := bin.Left.(*jsast.Identifier)
+	if !isID {
+		return 0, 0, false
+	}
+	num, isNum := bin.Right.(*jsast.NumberLiteral)
+	if !isNum {
+		return 0, 0, false
+	}
+	nameIdx = c.addConstant(NewString(id.Name.String()))
+	switch v := num.Value.(type) {
+	case int64:
+		limitIdx = c.addConstant(NewInteger(v))
+	case int:
+		limitIdx = c.addConstant(NewInteger(int64(v)))
+	case float64:
+		limitIdx = c.addConstant(NewDouble(v))
+	default:
+		return 0, 0, false
+	}
+	return nameIdx, limitIdx, true
+}
+
+// emitJSJumpIfLessFast appends the 9-byte OpJSJumpIfLessFast instruction with a
+// placeholder 4-byte exit target and returns the byte offset of that target for
+// later patching via patchJSJump / patchJSJumpTo.
+func (c *Compiler) emitJSJumpIfLessFast(nameIdx, limitIdx int) int {
+	pos := len(c.bytecode)
+	c.bytecode = append(c.bytecode,
+		byte(OpJSJumpIfLessFast),
+		byte(nameIdx>>8), byte(nameIdx),
+		byte(limitIdx>>8), byte(limitIdx),
+		0, 0, 0, 0, // placeholder exit target
+	)
+	// Return the byte offset of the 4-byte exit target for patchJSJump.
+	return pos + 5
 }
 
 func (c *Compiler) emitJSForIn(nameIdx int) int {

@@ -2333,6 +2333,154 @@ func (c *Compiler) emitForLoopStepUpdate(loopVarName string, hasUnitStep bool, u
 	c.emitSetForName(loopVarName)
 }
 
+// emitForNextFastInt appends the 10-byte OpForNextFastInt super-instruction directly
+// into the bytecode slice.  The instruction atomically applies the ±1 step to the
+// local counter slot and jumps back to bodyTarget when the counter is still within range.
+// stepSign: use +1 for incrementing loops, -1 for decrementing loops.
+func (c *Compiler) emitForNextFastInt(varLocalIdx, endLocalIdx int, unitStep int64, bodyTarget int) {
+	stepSign := byte(0x01) // +1
+	if unitStep < 0 {
+		stepSign = 0xFF // -1
+	}
+	c.bytecode = append(c.bytecode,
+		byte(OpForNextFastInt),
+		byte(varLocalIdx>>8), byte(varLocalIdx),
+		byte(endLocalIdx>>8), byte(endLocalIdx),
+		stepSign,
+		byte(bodyTarget>>24), byte(bodyTarget>>16), byte(bodyTarget>>8), byte(bodyTarget),
+	)
+}
+
+// inspectConstantIntEmission returns the compile-time integer value and true if the
+// bytecode range [start, end) is exactly one OpConstant instruction that references an
+// integer (or whole-number double) constant.  Used by the dead-loop elision pass.
+func (c *Compiler) inspectConstantIntEmission(start, end int) (int64, bool) {
+	if end-start != 3 {
+		return 0, false
+	}
+	if start < 0 || end > len(c.bytecode) {
+		return 0, false
+	}
+	if OpCode(c.bytecode[start]) != OpConstant {
+		return 0, false
+	}
+	constIdx := int(binary.BigEndian.Uint16(c.bytecode[start+1 : start+3]))
+	if constIdx < 0 || constIdx >= len(c.constants) {
+		return 0, false
+	}
+	v := c.constants[constIdx]
+	switch v.Type {
+	case VTInteger:
+		return v.Num, true
+	case VTDouble:
+		if v.Flt == float64(int64(v.Flt)) {
+			return int64(v.Flt), true
+		}
+	}
+	return 0, false
+}
+
+// isDeadLoopBody returns true when every opcode in bytecode[start:end] is either
+// OpLine (debug location marker) or OpNop (peephole filler).  A body that passes
+// this test has no observable side effects and can be elided.
+func isDeadLoopBody(bytecode []byte, start, end int) bool {
+	for ip := start; ip < end; {
+		op := OpCode(bytecode[ip])
+		ip++
+		switch op {
+		case OpLine:
+			ip += 4 // [lineH, lineL, colH, colL]
+		case OpNop:
+			// zero operands
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// parseForToStatementFastPath compiles the body of a unit-step For...Next loop whose
+// counter and limit are both local frame slots.  It emits a simplified single-direction
+// pre-loop bounds check and fuses the update+compare+jump tail into one OpForNextFastInt
+// super-instruction.  When the body is empty and both bounds are compile-time integer
+// constants the entire loop is elided and replaced with a single counter assignment.
+func (c *Compiler) parseForToStatementFastPath(
+	loopVarName string,
+	varLocalIdx, endLocalIdx int,
+	unitStep int64,
+	initConst int64, initIsConst bool,
+	limitConst int64, limitIsConst bool,
+) {
+	// Record position before the pre-loop check so we can roll back for full elision.
+	preLoopStart := len(c.bytecode)
+
+	// Pre-loop check: skip the loop entirely when the range is empty.
+	// For +1 step: skip if var > limit  (i.e. jump when NOT var <= limit).
+	// For -1 step: skip if var < limit  (i.e. jump when NOT var >= limit).
+	c.emit(OpGetLocal, varLocalIdx)
+	c.emit(OpGetLocal, endLocalIdx)
+	if unitStep == 1 {
+		c.emit(OpLte)
+	} else {
+		c.emit(OpGte)
+	}
+	jumpExit := c.emitJump(OpJumpIfFalse)
+
+	// Mark the start of the loop body — OpForNextFastInt will jump back here.
+	bodyStart := len(c.bytecode)
+
+	// Compile loop body statements.
+	for !c.matchEof() && !c.checkKeyword(vbscript.KeywordNext) {
+		c.parseStatement()
+	}
+	bodyEnd := len(c.bytecode)
+
+	// Dead-loop elision: when the body has no observable side effects AND both bounds are
+	// compile-time integer constants, replace the entire loop (pre-loop check included) with
+	// a single assignment of the post-loop counter value.  This runs in O(1) regardless of
+	// the loop range.
+	if isDeadLoopBody(c.bytecode, bodyStart, bodyEnd) && initIsConst && limitIsConst {
+		// Roll back all emitted bytecode to before the pre-loop check.
+		c.bytecode = c.bytecode[:preLoopStart]
+		// jumpExit no longer refers to live bytecode; do NOT call patchJump on it.
+
+		// Determine the post-loop counter value.
+		var finalVal int64
+		loopWillRun := (unitStep == 1 && initConst <= limitConst) ||
+			(unitStep == -1 && initConst >= limitConst)
+		if loopWillRun {
+			// Counter advances one step past the limit on normal completion.
+			finalVal = limitConst + unitStep
+		} else {
+			// Range is empty; counter keeps its initial value.
+			finalVal = initConst
+		}
+
+		finalIdx := c.addConstant(NewInteger(finalVal))
+		c.emit(OpConstant, finalIdx)
+		c.emit(OpLetLocal, varLocalIdx)
+
+		c.expectKeyword(vbscript.KeywordNext)
+		if c.isIdentifierLikeToken(c.next) {
+			c.move()
+		}
+		c.popLoopContextAndPatch(len(c.bytecode))
+		return
+	}
+
+	// Normal fast path: fused tail replaces the generic update + direction-check sequence.
+	c.emitForNextFastInt(varLocalIdx, endLocalIdx, unitStep, bodyStart)
+
+	// Patch pre-loop exit jump to here.
+	c.patchJump(jumpExit)
+
+	c.expectKeyword(vbscript.KeywordNext)
+	if c.isIdentifierLikeToken(c.next) {
+		c.move()
+	}
+	c.popLoopContextAndPatch(len(c.bytecode))
+}
+
 // parseForToStatement compiles numeric For...Next loops with optional Step expressions.
 func (c *Compiler) parseForToStatement() {
 	c.pushLoopContext("for")
@@ -2343,7 +2491,10 @@ func (c *Compiler) parseForToStatement() {
 	}
 	c.move()
 
+	// Track the bytecode range for the init expression to enable dead-loop elision.
+	initExprStart := len(c.bytecode)
 	c.parseExpression(PrecNone)
+	initExprEnd := len(c.bytecode)
 	c.emitSetForName(loopVarName)
 
 	c.expectKeyword(vbscript.KeywordTo)
@@ -2353,7 +2504,10 @@ func (c *Compiler) parseForToStatement() {
 	c.declareVar(endName)
 	c.declareVar(stepName)
 
+	// Track the bytecode range for the limit expression to enable dead-loop elision.
+	limitExprStart := len(c.bytecode)
 	c.parseExpression(PrecNone)
+	limitExprEnd := len(c.bytecode)
 	c.emitSetForName(endName)
 	hasUnitStep := false
 	unitStep := int64(0)
@@ -2370,6 +2524,26 @@ func (c *Compiler) parseForToStatement() {
 	}
 	c.emitSetForName(stepName)
 
+	// Resolve the loop variable and limit slots before deciding which path to take.
+	opLoopGet, idxLoopGet := c.resolveVar(loopVarName)
+	opEndGet, idxEndGet := c.resolveVar(endName)
+
+	// ---- FAST PATH ----
+	// Conditions: unit step (±1) AND both counter and limit are local frame slots.
+	// Emits a simplified single-direction pre-loop check and a fused OpForNextFastInt
+	// tail that eliminates the per-iteration direction test and multi-opcode condition.
+	if hasUnitStep && opLoopGet == OpGetLocal && opEndGet == OpGetLocal {
+		initConst, initIsConst := c.inspectConstantIntEmission(initExprStart, initExprEnd)
+		limitConst, limitIsConst := c.inspectConstantIntEmission(limitExprStart, limitExprEnd)
+		c.parseForToStatementFastPath(
+			loopVarName, idxLoopGet, idxEndGet, unitStep,
+			initConst, initIsConst, limitConst, limitIsConst,
+		)
+		return
+	}
+
+	// ---- SLOW PATH ----
+	// Generic direction check: handles non-unit steps, global variables, and float loops.
 	loopStart := len(c.bytecode)
 
 	opStepGet, idxStepGet := c.resolveVar(stepName)
@@ -2379,19 +2553,17 @@ func (c *Compiler) parseForToStatement() {
 	c.emit(OpGte)
 	jumpNegativeCheck := c.emitJump(OpJumpIfFalse)
 
-	opLoopGet, idxLoopGet := c.resolveVar(loopVarName)
 	c.emit(opLoopGet, idxLoopGet)
-	opEndGet, idxEndGet := c.resolveVar(endName)
 	c.emit(opEndGet, idxEndGet)
 	c.emit(OpLte)
 	jumpLoopEndPositive := c.emitJump(OpJumpIfFalse)
 	jumpBody := c.emitJump(OpJump)
 
 	c.patchJump(jumpNegativeCheck)
-	opLoopGet, idxLoopGet = c.resolveVar(loopVarName)
-	c.emit(opLoopGet, idxLoopGet)
-	opEndGet, idxEndGet = c.resolveVar(endName)
-	c.emit(opEndGet, idxEndGet)
+	opLoopGet2, idxLoopGet2 := c.resolveVar(loopVarName)
+	opEndGet2, idxEndGet2 := c.resolveVar(endName)
+	c.emit(opLoopGet2, idxLoopGet2)
+	c.emit(opEndGet2, idxEndGet2)
 	c.emit(OpGte)
 	jumpLoopEndNegative := c.emitJump(OpJumpIfFalse)
 

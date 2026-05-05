@@ -848,6 +848,12 @@ func opcodeOperandSize(op OpCode) int {
 	// 8-byte operands: classNameIdx(2) + methodNameIdx(2) + userSubIdx(2) + isPublic(2)
 	case OpRegisterClassMethod:
 		return 8
+	// 8-byte operands: nameConstIdx(2) + limitConstIdx(2) + exitTarget(4)
+	case OpJSJumpIfLessFast:
+		return 8
+	// 9-byte operands: varLocalIdx(2) + endLocalIdx(2) + stepSign(1) + bodyTarget(4)
+	case OpForNextFastInt:
+		return 9
 	// 10-byte operands: classNameIdx(2) + propertyNameIdx(2) + userSubIdx(2) + paramCount(2) + isPublic(2)
 	case OpRegisterClassPropertyGet, OpRegisterClassPropertyLet, OpRegisterClassPropertySet:
 		return 10
@@ -938,6 +944,26 @@ func remapExecuteGlobalBytecode(bytecode []byte, constBase int, bytecodeBase int
 			ip += 6
 		case OpGetGlobal, OpSetGlobal, OpGetLocal, OpSetLocal, OpLabel, OpArgGlobalRef, OpArgLocalRef, OpLetGlobal, OpLetLocal, OpCall, OpIncLocalInt, OpDecLocalInt, OpWriteN:
 			ip += 2
+		case OpForNextFastInt:
+			// varLocalIdx(2) + endLocalIdx(2) + stepSign(1): local indices, no remapping needed.
+			// bodyTarget(4): absolute bytecode offset that must be rebased.
+			ip += 5
+			target := int(binary.BigEndian.Uint32(bytecode[ip:])) + bytecodeBase
+			binary.BigEndian.PutUint32(bytecode[ip:], uint32(target))
+			ip += 4
+		case OpJSJumpIfLessFast:
+			// nameConstIdx(2): remap into merged constant table.
+			nameIdx := int(binary.BigEndian.Uint16(bytecode[ip:])) + constBase
+			binary.BigEndian.PutUint16(bytecode[ip:], uint16(nameIdx))
+			ip += 2
+			// limitConstIdx(2): remap into merged constant table.
+			limitIdx := int(binary.BigEndian.Uint16(bytecode[ip:])) + constBase
+			binary.BigEndian.PutUint16(bytecode[ip:], uint16(limitIdx))
+			ip += 2
+			// exitTarget(4): absolute bytecode offset that must be rebased.
+			exitTgt := int(binary.BigEndian.Uint32(bytecode[ip:])) + bytecodeBase
+			binary.BigEndian.PutUint32(bytecode[ip:], uint32(exitTgt))
+			ip += 4
 		case OpJSForIterEnter, OpJSForIterExit:
 			// Variable-length: [numVars(2), nameIdx1(2), nameIdx2(2), ...]
 			if ip+2 > len(bytecode) {
@@ -1526,6 +1552,67 @@ aspExecLoop:
 				vm.stack[slot] = current
 			default:
 				vm.stack[slot] = vm.subtractValues(current, NewInteger(1))
+			}
+
+		// OpForNextFastInt — fused increment/decrement + bounds-check + conditional back-jump.
+		// The loop variable and limit are both local frame slots; step direction is encoded in
+		// a single sign byte.  The fast integer branch executes with zero heap allocations.
+		case OpForNextFastInt:
+			varIdx := int(binary.BigEndian.Uint16(vm.bytecode[vm.ip:]))
+			vm.ip += 2
+			endIdx := int(binary.BigEndian.Uint16(vm.bytecode[vm.ip:]))
+			vm.ip += 2
+			stepSign := int8(vm.bytecode[vm.ip])
+			vm.ip++
+			bodyTarget := int(binary.BigEndian.Uint32(vm.bytecode[vm.ip:]))
+			vm.ip += 4
+
+			varSlot := vm.fp + varIdx
+			endSlot := vm.fp + endIdx
+			curr := vm.stack[varSlot]
+			limit := vm.stack[endSlot]
+
+			// Fastest path: both slots hold plain integers — pure arithmetic, no dispatch.
+			if curr.Type == VTInteger && limit.Type == VTInteger {
+				if stepSign > 0 {
+					curr.Num++
+					vm.stack[varSlot] = curr
+					if curr.Num <= limit.Num {
+						vm.ip = bodyTarget
+					}
+				} else {
+					curr.Num--
+					vm.stack[varSlot] = curr
+					if curr.Num >= limit.Num {
+						vm.ip = bodyTarget
+					}
+				}
+				continue
+			}
+
+			// Float / mixed fallback: handles VTDouble counter or limit without allocation.
+			if stepSign > 0 {
+				switch curr.Type {
+				case VTDouble:
+					curr.Flt++
+				default:
+					curr = vm.addValues(curr, NewInteger(1))
+				}
+				vm.stack[varSlot] = curr
+				if vm.asFloat(curr) <= vm.asFloat(limit) {
+					vm.ip = bodyTarget
+				}
+			} else {
+				switch curr.Type {
+				case VTDouble:
+					curr.Flt--
+				default:
+					curr = vm.subtractValues(curr, NewInteger(1))
+				}
+				vm.stack[varSlot] = curr
+				if vm.asFloat(curr) >= vm.asFloat(limit) {
+					vm.ip = bodyTarget
+				}
 			}
 
 		case OpAdd:
@@ -2486,6 +2573,55 @@ aspExecLoop:
 					}
 				}
 				vm.ip = target
+			}
+
+		// OpJSJumpIfLessFast — fused bounds check for `identifier < numericLiteral` loop tests.
+		// Reads the loop variable from the JS environment, compares it to the stored constant limit,
+		// and jumps to the exit target when the variable is NOT less (condition false).  Falls through
+		// to the loop body when the variable IS less — zero stack mutation on the hot path.
+		// The exit target is always a forward jump, so no back-jump counter increment is needed here.
+		case OpJSJumpIfLessFast:
+			nameIdx := int(binary.BigEndian.Uint16(vm.bytecode[vm.ip:]))
+			vm.ip += 2
+			limitIdx := int(binary.BigEndian.Uint16(vm.bytecode[vm.ip:]))
+			vm.ip += 2
+			exitTarget := int(binary.BigEndian.Uint32(vm.bytecode[vm.ip:]))
+			vm.ip += 4
+
+			varVal := vm.jsGetName(vm.constants[nameIdx].Str)
+			limit := vm.constants[limitIdx]
+
+			// Numeric fast path: avoid full jsLess dispatch when both sides are plain numbers.
+			var varF, limitF float64
+			fastOK := true
+			switch varVal.Type {
+			case VTDouble:
+				varF = varVal.Flt
+			case VTInteger:
+				varF = float64(varVal.Num)
+			default:
+				fastOK = false
+			}
+			if fastOK {
+				switch limit.Type {
+				case VTDouble:
+					limitF = limit.Flt
+				case VTInteger:
+					limitF = float64(limit.Num)
+				default:
+					fastOK = false
+				}
+			}
+			if fastOK {
+				// varF >= limitF means the loop condition (var < limit) is false → exit.
+				if varF >= limitF {
+					vm.ip = exitTarget
+				}
+			} else {
+				// General fallback: delegate to the full JScript less-than comparison.
+				if !vm.jsTruthy(vm.jsLess(varVal, limit)) {
+					vm.ip = exitTarget
+				}
 			}
 
 		case OpJSLoadCatchError:

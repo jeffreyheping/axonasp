@@ -223,7 +223,8 @@ Response.Write gSet.Name & ":" & gLet & ":" & TypeName(gMix) & ":" & gMix
 }
 
 // TestASPForLoopEmitsIncLocalInt verifies that local For...Next loops with default
-// step compile to OpIncLocalInt and still execute correctly.
+// step compile to either OpIncLocalInt (slow path) or OpForNextFastInt (fast-path
+// super-instruction) and still execute correctly.
 func TestASPForLoopEmitsIncLocalInt(t *testing.T) {
 	source := `<%
 Sub RunLoop()
@@ -242,15 +243,17 @@ Call RunLoop()
 		t.Fatalf("compile failed: %v", err)
 	}
 
-	hasIncLocalInt := false
+	// Local unit-step loops now emit OpForNextFastInt (fused super-instruction).
+	// Accept either that or the legacy OpIncLocalInt so this test is forward-compatible.
+	hasStepOpcode := false
 	for _, raw := range compiler.Bytecode() {
-		if OpCode(raw) == OpIncLocalInt {
-			hasIncLocalInt = true
+		if OpCode(raw) == OpIncLocalInt || OpCode(raw) == OpForNextFastInt {
+			hasStepOpcode = true
 			break
 		}
 	}
-	if !hasIncLocalInt {
-		t.Fatalf("expected OpIncLocalInt in bytecode, got %v", compiler.Bytecode())
+	if !hasStepOpcode {
+		t.Fatalf("expected OpIncLocalInt or OpForNextFastInt in bytecode, got %v", compiler.Bytecode())
 	}
 
 	vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
@@ -270,7 +273,8 @@ Call RunLoop()
 }
 
 // TestASPForLoopEmitsDecLocalInt verifies that local For...Next loops with
-// constant Step -1 compile to OpDecLocalInt and still execute correctly.
+// constant Step -1 compile to either OpDecLocalInt (slow path) or OpForNextFastInt
+// (fast-path super-instruction) and still execute correctly.
 func TestASPForLoopEmitsDecLocalInt(t *testing.T) {
 	source := `<%
 Sub RunLoop()
@@ -289,15 +293,17 @@ Call RunLoop()
 		t.Fatalf("compile failed: %v", err)
 	}
 
-	hasDecLocalInt := false
+	// Local unit-step loops now emit OpForNextFastInt (fused super-instruction).
+	// Accept either that or the legacy OpDecLocalInt so this test is forward-compatible.
+	hasStepOpcode := false
 	for _, raw := range compiler.Bytecode() {
-		if OpCode(raw) == OpDecLocalInt {
-			hasDecLocalInt = true
+		if OpCode(raw) == OpDecLocalInt || OpCode(raw) == OpForNextFastInt {
+			hasStepOpcode = true
 			break
 		}
 	}
-	if !hasDecLocalInt {
-		t.Fatalf("expected OpDecLocalInt in bytecode, got %v", compiler.Bytecode())
+	if !hasStepOpcode {
+		t.Fatalf("expected OpDecLocalInt or OpForNextFastInt in bytecode, got %v", compiler.Bytecode())
 	}
 
 	vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())

@@ -287,6 +287,33 @@ const (
 	// preserved because the bytecode array is never shrunk.
 	// [OpCode]  (0 operand bytes)
 	OpNop
+
+	// OpForNextFastInt is a fused super-instruction for integer For...Next loops with ±1 step.
+	// It atomically increments or decrements a local counter slot, compares it to a local
+	// limit slot, and jumps directly back to the loop body when still in range — eliminating
+	// the per-iteration direction check and the multi-opcode condition sequence used by the
+	// generic path.  The pre-loop bounds check is emitted separately (OpLte/OpGte + OpJumpIfFalse)
+	// to guard against zero-iteration ranges; this opcode only runs once the loop is entered.
+	//
+	// Stack: unchanged — no values pushed or popped.
+	// Format: [OpCode(1), varLocalIdxH(1), varLocalIdxL(1), endLocalIdxH(1), endLocalIdxL(1),
+	//          stepSign(1), bodyTargetB3(1), bodyTargetB2(1), bodyTargetB1(1), bodyTargetB0(1)]
+	// stepSign: 0x01 = increment (+1), 0xFF = decrement (-1).
+	// Total: 10 bytes (1 opcode + 9 operand bytes).
+	OpForNextFastInt
+
+	// OpJSJumpIfLessFast is a fused test-and-branch super-instruction for JScript numeric
+	// for-loops that use the pattern `identifier < numericLiteral` as their test condition.
+	// It reads the named variable from the JS environment, compares it numerically to a
+	// constant limit, and jumps to the exit target when the variable is NOT less than the
+	// limit (loop condition false).  When the variable IS less the instruction falls through
+	// to the loop body — zero stack impact on the hot iteration path.
+	//
+	// Stack: unchanged — no values pushed or popped.
+	// Format: [OpCode(1), nameConstIdxH(1), nameConstIdxL(1), limitConstIdxH(1), limitConstIdxL(1),
+	//          exitTargetB3(1), exitTargetB2(1), exitTargetB1(1), exitTargetB0(1)]
+	// Total: 9 bytes (1 opcode + 8 operand bytes).
+	OpJSJumpIfLessFast
 )
 
 func (op OpCode) String() string {
@@ -579,6 +606,10 @@ func (op OpCode) String() string {
 		return "OpJSForIterExit"
 	case OpNop:
 		return "OpNop"
+	case OpForNextFastInt:
+		return "OpForNextFastInt"
+	case OpJSJumpIfLessFast:
+		return "OpJSJumpIfLessFast"
 	default:
 		return "OpUnknown"
 	}

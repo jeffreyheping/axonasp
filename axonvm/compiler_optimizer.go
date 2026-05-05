@@ -108,9 +108,23 @@ func (c *Compiler) optimizeLocalCopyPropagationPass() bool {
 				}
 			}
 
+		case OpForNextFastInt:
+			// OpForNextFastInt writes to varLocalIdx (bytes ip+1..ip+2) and is a
+			// conditional backward jump, so both the written slot and all aliases must
+			// be invalidated at this basic-block boundary.
+			written := binary.BigEndian.Uint16(c.bytecode[ip+1 : ip+3])
+			delete(alias, written)
+			for k, v := range alias {
+				if v == written {
+					delete(alias, k)
+				}
+			}
+			clear(alias)
+
 		case OpJump, OpJumpIfFalse, OpJumpIfTrue, OpGotoLabel,
 			OpJSJump, OpJSJumpIfFalse, OpJSJumpIfTrue, OpJSTryEnter,
 			OpJSBreak, OpJSContinue, OpJSForInCleanup,
+			OpJSJumpIfLessFast,
 			OpCall, OpCallMember, OpCallBuiltin, OpJSCall, OpJSCallMember, OpJSNew:
 			clear(alias)
 		}
@@ -219,6 +233,18 @@ func collectJumpTargets(bytecode []byte) map[int]struct{} {
 			// 4-byte absolute target immediately follows the opcode.
 			if ip+4 <= len(bytecode) {
 				targets[int(binary.BigEndian.Uint32(bytecode[ip:]))] = struct{}{}
+			}
+		case OpForNextFastInt:
+			// Body target sits at bytes 6-9 of the operand field
+			// (after varLocalIdx(2), endLocalIdx(2), stepSign(1)).
+			if ip+9 <= len(bytecode) {
+				targets[int(binary.BigEndian.Uint32(bytecode[ip+5:]))] = struct{}{}
+			}
+		case OpJSJumpIfLessFast:
+			// Exit target sits at bytes 5-8 of the operand field
+			// (after nameConstIdx(2), limitConstIdx(2)).
+			if ip+8 <= len(bytecode) {
+				targets[int(binary.BigEndian.Uint32(bytecode[ip+4:]))] = struct{}{}
 			}
 		}
 		ip += size
