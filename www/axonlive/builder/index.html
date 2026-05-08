@@ -219,10 +219,65 @@
                                 placeholder="Opt 1, Opt 2">
                         </div>
 
-                        <!-- Image specific -->
-                        <div class="prop-group" v-if="selectedComponent.type === 'image'">
-                            <label class="prop-label">Image URL</label>
-                            <input type="text" class="prop-input" v-model="selectedComponent.src">
+                        <!-- Raw HTML / Script / CSS Style content editor -->
+                        <div v-if="['rawhtml','script','style'].includes(selectedComponent.type)">
+                            <div class="prop-group">
+                                <label class="prop-label">Content</label>
+                                <textarea class="prop-textarea" v-model="selectedComponent.text"
+                                    style="min-height:150px; font-family:monospace; font-size:11px;"
+                                    :placeholder="selectedComponent.type === 'style' ? '/* your css here */' : selectedComponent.type === 'script' ? '// your JS here' : '<div>HTML content</div>'"></textarea>
+                            </div>
+                            <div class="prop-group" v-if="selectedComponent.type === 'script'">
+                                <label><input type="checkbox" v-model="selectedComponent.serverSide"> Run on Server
+                                    (runat=&quot;server&quot;)</label>
+                                <p style="font-size:9px; color:#666; margin-top:2px;">Wraps in &lt;script
+                                    language=&quot;javascript&quot; runat=&quot;server&quot;&gt;</p>
+                            </div>
+                        </div>
+
+                        <!-- File Uploader specific -->
+                        <div v-if="selectedComponent.type === 'fileuploader'">
+                            <div class="prop-group">
+                                <label class="prop-label">Target Directory</label>
+                                <input type="text" class="prop-input" v-model="selectedComponent.targetDir"
+                                    placeholder="/uploads">
+                            </div>
+                            <div class="prop-group">
+                                <label><input type="checkbox" v-model="selectedComponent.showUploadButton"> Show upload
+                                    button</label>
+                                <p style="font-size:9px; color:#666; margin-top:2px;">When disabled, the selected file
+                                    is uploaded automatically on change.</p>
+                            </div>
+                            <div class="prop-group" v-if="selectedComponent.showUploadButton">
+                                <label class="prop-label">Upload Button Text</label>
+                                <input type="text" class="prop-input" v-model="selectedComponent.uploadButtonText"
+                                    placeholder="Send File">
+                            </div>
+                            <div class="prop-group">
+                                <label class="prop-label">Max File Size (bytes)</label>
+                                <input type="number" class="prop-input" v-model.number="selectedComponent.maxFileSize">
+                            </div>
+                            <div class="prop-group">
+                                <label class="prop-label">Allowed Exts (comma separated)</label>
+                                <input type="text" class="prop-input" v-model="selectedComponent.allowedExtensions"
+                                    placeholder="jpg,png,pdf">
+                            </div>
+                            <div class="prop-group">
+                                <label class="prop-label">Blocked Exts (comma separated)</label>
+                                <input type="text" class="prop-input" v-model="selectedComponent.blockedExtensions"
+                                    placeholder="exe,bat">
+                            </div>
+                            <div class="prop-group">
+                                <label class="prop-label">Saved File Name</label>
+                                <input type="text" class="prop-input" v-model="selectedComponent.savedFileName"
+                                    placeholder="document.pdf">
+                                <p style="font-size:9px; color:#666; margin-top:2px;">If empty, original name is
+                                    preserved.</p>
+                            </div>
+                            <div class="prop-group" v-if="selectedComponent.savedFileName">
+                                <label><input type="checkbox" v-model="selectedComponent.preserveName"> Preserve
+                                    Original Name</label>
+                            </div>
                         </div>
 
                         <!-- Table specific -->
@@ -405,6 +460,8 @@
                                         <option value="onclick">onclick</option>
                                         <option value="onchange">onchange</option>
                                         <option value="onsubmit">onsubmit</option>
+                                        <option v-if="selectedComponent.type === 'fileuploader'" value="onupload">
+                                            onupload</option>
                                     </select>
                                     <button class="btn-xp" @click="addEvent">Add Server Event</button>
                                 </div>

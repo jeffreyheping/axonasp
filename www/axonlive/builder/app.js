@@ -20,12 +20,13 @@ const availableComponents = [
     { type: 'listbox', label: 'ListBox' },
     { type: 'label', label: 'Label / Text' },
     { type: 'hr', label: 'Horizontal Rule' },
+    { type: 'fileuploader', label: 'File Uploader' },
     { type: 'hiddenfield', label: 'Hidden Field' },
     { type: 'image', label: 'Image' },
     { type: 'iframe', label: 'iFrame' },
     { type: 'table', label: 'Table' },
     { type: 'link', label: 'Hyperlink' },
-    { type: 'placeholder', label: 'Placeholder Div' },
+    { type: 'placeholder', label: 'Placeholder' },
     { type: 'timer', label: 'Server Timer' },
     { type: 'rawhtml', label: 'Raw HTML' },
     { type: 'script', label: 'JavaScript' },
@@ -84,8 +85,15 @@ function createComponentInstance(type) {
         case 'listbox': return { ...base, options: 'Option 1, Option 2, Option 3', multiSelect: false, size: 4, width: '150px', height: '100px' };
         case 'label': return { ...base, text: 'Label text', reRender: true, width: '100px', height: '20px' };
         case 'hr': return { ...base, width: '100%', height: '2px', position: 'static' };
+        case 'fileuploader': return {
+            ...base, width: '300px', height: '80px', targetDir: '/uploads', maxFileSize: 5242880,
+            allowedExtensions: '', blockedExtensions: 'exe,bat', preserveName: true, savedFileName: '',
+            showUploadButton: true, uploadButtonText: 'Send File',
+            reRender: true // To update result label
+        };
         case 'hiddenfield': return { ...base, value: '', position: 'static', width: '0px', height: '0px' };
         case 'image': return { ...base, src: 'https://g3pix.com.br/axonasp/apple-icon-60x60.png', width: '60px', height: '60px' };
+        case 'iframe': return { ...base, src: 'https://g3pix.com.br', width: '400px', height: '300px' };
         case 'table':
             let t = { ...base, rows: 2, cols: 2, cells: {}, width: '100%', height: 'auto', showHeader: false, showFooter: false };
             for (let r = 1; r <= 2; r++) {
@@ -98,7 +106,7 @@ function createComponentInstance(type) {
         case 'placeholder': return { ...base, text: 'Content placeholder', cssClass: 'info-banner', width: '100%', height: '50px' };
         case 'timer': return { ...base, delay: 1000, triggerEvent: 'ontimer', events: { ontimer: '// Timer event logic here\n' } };
         case 'rawhtml': return { ...base, text: '<div>Raw HTML</div>', width: '200px', height: '100px' };
-        case 'script': return { ...base, text: 'console.log("Hello from AxonLive");' };
+        case 'script': return { ...base, text: 'console.log("Hello from AxonLive");', serverSide: false };
         case 'style': return { ...base, text: '/* your css here */' };
     }
     return base;
@@ -118,7 +126,7 @@ const buildStyleString = (comp) => {
     if (comp.color) s += `color:${comp.color};`;
     if (comp.backgroundColor) s += `background-color:${comp.backgroundColor};`;
     if (comp.border) s += `border:${comp.border};`;
-    
+
     // Flex Item Props
     if (comp.flexGrow !== '') s += `flex-grow:${comp.flexGrow};`;
     if (comp.flexShrink !== '') s += `flex-shrink:${comp.flexShrink};`;
@@ -134,6 +142,83 @@ const buildStyleString = (comp) => {
         if (comp.right) s += `right:${comp.right};`;
     }
     return s;
+};
+
+const escapeHtmlAttr = (value) => String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+const escapeHtmlText = (value) => String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+const escapeJsSingleQuotedString = (value) => String(value || '')
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n');
+
+const getPrimaryServerEvent = (comp) => {
+    if (!comp.events) return '';
+    for (const evt in comp.events) {
+        return evt;
+    }
+    return '';
+};
+
+const buildComponentAttrs = (comp, options = {}) => {
+    let attrs = `id="${escapeHtmlAttr(comp.id)}"`;
+    if (comp.cssClass && !options.skipClass) attrs += ` class="${escapeHtmlAttr(comp.cssClass)}"`;
+
+    const styleStr = buildStyleString(comp);
+    if (styleStr && !options.skipStyle) attrs += ` style="${escapeHtmlAttr(styleStr)}"`;
+
+    if (options.includeRuntimeBindings) {
+        const primaryEvent = getPrimaryServerEvent(comp);
+        if (primaryEvent) {
+            const domEvt = primaryEvent.replace(/^on/, '');
+            attrs += ` data-g3al-id="${escapeHtmlAttr(comp.id)}" data-g3al-event="${escapeHtmlAttr(domEvt)}" data-g3al-event-name="${escapeHtmlAttr(primaryEvent)}"`;
+        }
+
+        if (comp.clientEvents) {
+            for (const clientEventName in comp.clientEvents) {
+                attrs += ` ${clientEventName}="${escapeHtmlAttr(comp.clientEvents[clientEventName])}"`;
+            }
+        }
+    }
+
+    return { attrs, styleStr };
+};
+
+const buildUploaderAction = (compId, fileInputId) =>
+    `G3AxonLive.uploadFile(&quot;${escapeHtmlAttr(compId)}&quot;, &quot;${escapeHtmlAttr(fileInputId)}&quot;, &quot;onupload&quot;)`;
+
+const renderUploaderInner = (comp, resultMarkup) => {
+    const fileInputId = `${comp.id}_file`;
+    const resultId = `${comp.id}_result`;
+    const uploadAction = buildUploaderAction(comp.id, fileInputId);
+    const inputOnChange = comp.showUploadButton ? '' : ` onchange="${uploadAction}"`;
+    const uploadButton = comp.showUploadButton
+        ? `<button type="button" class="btn btn-primary" style="margin-top:5px;" onclick="${uploadAction}">${escapeHtmlText(comp.uploadButtonText || 'Send File')}</button>`
+        : '';
+
+    return `<div class="sidebar-header" style="font-size:10px; margin-bottom:5px;">File Upload</div><input type="file" id="${escapeHtmlAttr(fileInputId)}"${inputOnChange}>${uploadButton}<div id="${escapeHtmlAttr(resultId)}" style="font-size:10px; color:#666; margin-top:5px;">Result: ${resultMarkup}</div>`;
+};
+
+const hasComponentType = (compList, componentType) => {
+    for (const comp of compList) {
+        if (comp.type === componentType) return true;
+        if (comp.children && hasComponentType(comp.children, componentType)) return true;
+        if (comp.type === 'table' && comp.cells) {
+            for (const key in comp.cells) {
+                if (comp.cells[key].children && hasComponentType(comp.cells[key].children, componentType)) return true;
+            }
+        }
+    }
+    return false;
 };
 
 const ComponentRenderer = {
@@ -243,10 +328,19 @@ const ComponentRenderer = {
 
             <hr v-else-if="comp.type === 'hr'" :style="computedStyle">
 
+            <div v-else-if="comp.type === 'fileuploader'" class="card" style="width:100%; height:100%; padding:10px;">
+                <div style="font-weight:bold; margin-bottom:5px;">FILE UPLOADER</div>
+                <input type="file" style="width:100%" disabled>
+                <button v-if="comp.showUploadButton" type="button" class="btn btn-primary" style="margin-top:5px;" disabled>{{ comp.uploadButtonText || 'Send File' }}</button>
+                <div style="font-size:10px; color:#666; margin-top:5px;">Result: Ready to upload</div>
+            </div>
+
             <div v-else-if="comp.type === 'hiddenfield'" style="width:20px; height:20px; background:#ddd; border:1px solid #333; text-align:center; font-size:10px;">H</div>
             
             <img v-else-if="comp.type === 'image'" :src="comp.src" :class="comp.cssClass" alt="Image" style="max-width:100%; width:100%; height:100%;">
             
+            <iframe v-else-if="comp.type === 'iframe'" :src="comp.src" style="width:100%; height:100%; border:1px solid #ccc;"></iframe>
+
             <a v-else-if="comp.type === 'link'" href="#" :class="comp.cssClass" style="width:100%; height:100%;" @click.prevent>
                 <input v-if="isEditing" type="text" v-model="comp.text" @blur="stopEdit" @keyup.enter="stopEdit" class="prop-input" style="width:100%">
                 <template v-else>{{ comp.text }}</template>
@@ -494,7 +588,7 @@ const app = createApp({
                 try {
                     allComponents.value = JSON.parse(ev.target.result);
                     saveHistory();
-                } catch(err) {
+                } catch (err) {
                     alert("Invalid .g3al file format");
                 }
             };
@@ -504,11 +598,11 @@ const app = createApp({
 
         // Compute separated components
         const components = computed(() => {
-            return allComponents.value.filter(c => !['timer', 'script', 'style'].includes(c.type));
+            return allComponents.value.filter(c => !['timer', 'script', 'style', 'hiddenfield'].includes(c.type));
         });
 
         const functionalComponents = computed(() => {
-            return allComponents.value.filter(c => ['timer', 'script', 'style'].includes(c.type));
+            return allComponents.value.filter(c => ['timer', 'script', 'style', 'hiddenfield'].includes(c.type));
         });
 
         // DRAG & RESIZE STATE
@@ -554,7 +648,7 @@ const app = createApp({
             dragData.startX = event.clientX;
             dragData.startY = event.clientY;
             contextMenu.show = false;
-            
+
             const el = document.getElementById(comp.id);
             if (el) {
                 dragData.startWidth = el.offsetWidth;
@@ -571,11 +665,11 @@ const app = createApp({
             if (dragData.isDragging && dragData.activeComp) {
                 const dx = e.clientX - dragData.startX;
                 const dy = e.clientY - dragData.startY;
-                
+
                 if (dragData.activeComp.position !== 'static') {
                     const newTop = (dragData.startTop + dy);
                     const newLeft = (dragData.startLeft + dx);
-                    
+
                     dragData.activeComp.top = newTop + 'px';
                     dragData.activeComp.left = newLeft + 'px';
 
@@ -587,7 +681,7 @@ const app = createApp({
                 const dx = e.clientX - dragData.startX;
                 const dy = e.clientY - dragData.startY;
                 const dir = dragData.resizeDir;
-                
+
                 let newWidth = dragData.startWidth;
                 let newHeight = dragData.startHeight;
                 let newTop = dragData.startTop;
@@ -607,7 +701,7 @@ const app = createApp({
                 if (newWidth > 10) {
                     dragData.activeComp.width = newWidth + 'px';
                     if (dir.includes('w') && dragData.activeComp.position !== 'static') dragData.activeComp.left = newLeft + 'px';
-                    
+
                     // Auto-extend width
                     const rightEdge = (parseInt(dragData.activeComp.left) || 0) + newWidth;
                     if (rightEdge > pageSettings.canvasWidth) pageSettings.canvasWidth = rightEdge + 50;
@@ -659,7 +753,7 @@ const app = createApp({
                     allComponents.value = parsed;
                     saveHistory();
                 }
-            } catch (e) {}
+            } catch (e) { }
         };
 
         const onDragStart = (event, comp) => {
@@ -779,31 +873,7 @@ const app = createApp({
             for (const comp of compList) {
                 if (['timer', 'script', 'style'].includes(comp.type)) continue;
 
-                let attrs = `id="${comp.id}"`;
-                if (comp.cssClass && comp.type !== 'modal') attrs += ` class="${comp.cssClass}"`;
-
-                const styleStr = buildStyleString(comp);
-                if (styleStr && comp.type !== 'modal') attrs += ` style="${styleStr}"`;
-
-                let hasEvents = false;
-                let primaryEvent = "";
-                if (comp.events) {
-                    for (const evt in comp.events) {
-                        hasEvents = true;
-                        primaryEvent = evt;
-                    }
-                }
-
-                if (hasEvents) {
-                    const domEvt = primaryEvent.replace(/^on/, '');
-                    attrs += ` data-g3al-id="${comp.id}" data-g3al-event="${domEvt}" data-g3al-event-name="${primaryEvent}"`;
-                }
-
-                if (comp.clientEvents) {
-                    for (const ce in comp.clientEvents) {
-                        attrs += ` ${ce}="${comp.clientEvents[ce].replace(/"/g, '&quot;')}"`;
-                    }
-                }
+                const { attrs, styleStr } = buildComponentAttrs(comp, { includeRuntimeBindings: true, skipClass: comp.type === 'modal', skipStyle: comp.type === 'modal' });
 
                 if (comp.type === 'panel') {
                     html += `${indent}<div ${attrs}>\n`;
@@ -811,7 +881,7 @@ const app = createApp({
                     html += `${indent}</div>\n`;
                 } else if (comp.type === 'modal') {
                     let mClass = comp.cssClass ? ` ${comp.cssClass}` : '';
-                    html += `${indent}<div ${attrs} class="window${mClass}" style="display:none; ${styleStr}">\n`;
+                    html += `${indent}<div ${attrs} class="window${escapeHtmlAttr(mClass)}" style="${escapeHtmlAttr(`display:none; ${styleStr}`)}">\n`;
                     html += `${indent}  <div class="window-header"><span>${comp.title}</span><span style="cursor:pointer" onclick="G3AxonLive.closeModal('${comp.id}')">X</span></div>\n`;
                     html += `${indent}  <div class="window-body">\n`;
                     if (comp.modalType !== 'none') {
@@ -857,7 +927,8 @@ const app = createApp({
                     html += `${indent}<${comp.listType} ${attrs}>\n`;
                     const items = (comp.items || '').split(',');
                     for (const item of items) {
-                        html += `${indent}    <li>${item.trim()}</li>\n`;
+                        const itm = item.trim();
+                        html += `${indent}    <li>${itm}</li>\n`;
                     }
                     html += `${indent}</${comp.listType}>\n`;
                 } else if (comp.type === 'select') {
@@ -882,10 +953,16 @@ const app = createApp({
                     html += `${indent}<span ${attrs}>${comp.text}</span>\n`;
                 } else if (comp.type === 'hr') {
                     html += `${indent}<hr ${attrs}>\n`;
+                } else if (comp.type === 'fileuploader') {
+                    html += `${indent}<div ${attrs}>\n`;
+                    html += `${indent}    ${renderUploaderInner(comp, `<%=Server.HTMLEncode(String(${comp.id}_val || "Ready"))%>`)}\n`;
+                    html += `${indent}</div>\n`;
                 } else if (comp.type === 'hiddenfield') {
                     html += `${indent}<input type="hidden" ${attrs} value="${comp.value || ''}">\n`;
                 } else if (comp.type === 'image') {
                     html += `${indent}<img src="${comp.src}" ${attrs} alt="">\n`;
+                } else if (comp.type === 'iframe') {
+                    html += `${indent}<iframe src="${comp.src}" ${attrs} frameborder="0"></iframe>\n`;
                 } else if (comp.type === 'link') {
                     html += `${indent}<a href="${comp.src || '#'}" ${attrs}>${comp.text}</a>\n`;
                 } else if (comp.type === 'table') {
@@ -936,7 +1013,7 @@ const app = createApp({
         const collectStateComponents = (compList, result) => {
             result = result || [];
             for (const comp of compList) {
-                if (comp.reRender && (comp.type === 'label' || comp.type === 'input' || comp.type === 'textarea' || comp.type === 'select' || comp.type === 'checkbox' || comp.type === 'radio' || comp.type === 'hiddenfield')) {
+                if (comp.reRender && (comp.type === 'label' || comp.type === 'input' || comp.type === 'textarea' || comp.type === 'select' || comp.type === 'checkbox' || comp.type === 'radio' || comp.type === 'hiddenfield' || comp.type === 'fileuploader')) {
                     result.push(comp);
                 }
                 if (comp.children) collectStateComponents(comp.children, result);
@@ -975,10 +1052,7 @@ const app = createApp({
             let js = "";
             for (const comp of compList) {
                 if (comp.reRender && !['timer', 'script', 'style', 'rawhtml', 'checkboxlist', 'radiobuttonlist', 'bulletedlist', 'listbox', 'hr'].includes(comp.type)) {
-                    let attrs = `id="${comp.id}"`;
-                    if (comp.cssClass) attrs += ` class="${comp.cssClass}"`;
-                    const styleStr = buildStyleString(comp);
-                    if (styleStr) attrs += ` style="${styleStr}"`;
+                    let { attrs } = buildComponentAttrs(comp, { includeRuntimeBindings: true });
 
                     let inner = "";
                     let tag = "div";
@@ -990,13 +1064,16 @@ const app = createApp({
                     else if (comp.type === 'checkbox') { tag = "label"; inner = `<input type="checkbox" '+(${comp.id}_val === "true" ? "checked" : "")+'> ${comp.text}`; }
                     else if (comp.type === 'radio') { tag = "label"; inner = `<input type="radio" name="${comp.name}" '+(${comp.id}_val === "true" ? "checked" : "")+'> ${comp.text}`; }
                     else if (comp.type === 'hiddenfield') { tag = "input"; inner = ""; attrs += ` type="hidden" value="'+${comp.id}_val+'"`; }
+                    else if (comp.type === 'fileuploader') {
+                        inner = renderUploaderInner(comp, `'+(${comp.id}_val || "Ready")+'`);
+                    }
                     else { inner = comp.text || ""; }
 
                     let htmlStr = `<${tag} ${attrs}>${inner}</${tag}>`;
                     if (tag === 'input' || tag === 'img') {
                         htmlStr = `<${tag} ${attrs}>`;
                     }
-                    js += `    AxonLive.RegisterComponent("${comp.id}", '${htmlStr}');\n`;
+                    js += `    AxonLive.RegisterComponent("${comp.id}", '${escapeJsSingleQuotedString(htmlStr)}');\n`;
                 }
                 if (comp.children) {
                     js += generateReRenderCalls(comp.children);
@@ -1013,16 +1090,40 @@ const app = createApp({
         const generateEventSwitch = (compList) => {
             let js = "";
             for (const comp of compList) {
-                if (comp.events && Object.keys(comp.events).length > 0) {
+                if (comp.events && Object.keys(comp.events).length > 0 || comp.type === 'fileuploader') {
                     js += `        case "${comp.id}":\n`;
                     js += `            // Granular API: Auto-generated proxies for interaction\n`;
                     js += `            var ${comp.id} = AxonLive.GetComponent("${comp.id}");\n`;
-                    
+
+                    if (comp.type === 'fileuploader') {
+                        js += `            // Multipart File Upload Logic\n`;
+                        js += `            if (evtName === "onupload" && Request.TotalBytes > 0 && Request.ServerVariables("HTTP_X_G3AL_UPLOAD") == "true") {\n`;
+                        js += `                var uploader = Server.CreateObject("G3FILEUPLOADER");\n`;
+                        js += `                uploader.MaxFileSize = ${comp.maxFileSize || 5242880};\n`;
+                        if (comp.allowedExtensions) {
+                            (comp.allowedExtensions.split(',')).forEach(ext => {
+                                js += `                uploader.AllowExtension("${ext.trim()}");\n`;
+                            });
+                        }
+                        if (comp.blockedExtensions) {
+                            (comp.blockedExtensions.split(',')).forEach(ext => {
+                                js += `                uploader.BlockExtension("${ext.trim()}");\n`;
+                            });
+                        }
+                        const savedName = comp.savedFileName ? `"${comp.savedFileName}"` : '""';
+                        const preserve = comp.savedFileName ? (comp.preserveName ? "true" : "false") : "true";
+                        js += `                uploader.PreserveOriginalName = ${preserve};\n`;
+                        js += `                var result = uploader.Process("file", "${comp.targetDir || '/uploads'}", ${savedName});\n`;
+                        js += `                if (result.Item("IsSuccess")) { ${comp.id}_val = "Success: " + result.Item("RelativePath"); }\n`;
+                        js += `                else { ${comp.id}_val = "Error: " + result.Item("ErrorMessage"); }\n`;
+                        js += `            }\n`;
+                    }
+
                     // Automatically sync _val from incoming event arguments if it's a stateful component
                     if (comp.reRender) {
                         js += `            if (AxonLive.GetEventArg("value") !== "") { ${comp.id}_val = AxonLive.GetEventArg("value"); }\n`;
                         if (comp.type === 'checkbox') {
-                             js += `            ${comp.id}_val = AxonLive.GetEventArg("checked");\n`;
+                            js += `            ${comp.id}_val = AxonLive.GetEventArg("checked");\n`;
                         }
                     }
 
@@ -1062,13 +1163,28 @@ const app = createApp({
             for (const s of styles) styleBlock += `<style>\n${s.text}\n</style>\n`;
 
             let scriptBlock = "";
-            for (const sc of scripts) scriptBlock += `<script>\n${sc.text}\n</script>\n`;
+            for (const sc of scripts) {
+                if (sc.serverSide) {
+                    scriptBlock += `<script language="javascript" runat="server">\n${sc.text}\n</script>\n`;
+                } else {
+                    scriptBlock += `<script>\n${sc.text}\n</script>\n`;
+                }
+            }
 
             const switchLogic = generateEventSwitch(allComponents.value);
             const renderLogic = generateReRenderCalls(allComponents.value);
             const stateRestore = generateStateRestore(allComponents.value);
             const statePersist = generateStatePersist(allComponents.value);
             const htmlLayout = generateHTML(components.value, "    ");
+            const hasModal = hasComponentType(allComponents.value, 'modal');
+
+            // Generate hidden field HTML separately (not on canvas but emitted into the page body)
+            const hiddenFields = allComponents.value.filter(c => c.type === 'hiddenfield');
+            let hiddenFieldsHtml = "";
+            for (const hf of hiddenFields) {
+                const { attrs: hfAttrs } = buildComponentAttrs(hf, { includeRuntimeBindings: true });
+                hiddenFieldsHtml += `    <input type="hidden" ${hfAttrs} value="${escapeHtmlAttr(hf.value || '')}">${'\n'}`;
+            }
 
             let mainContainerStyle = ``;
             if (pageSettings.display === 'flex') {
@@ -1079,7 +1195,7 @@ const app = createApp({
 <%
 /* Auto-generated by G3pix AxonLive Visual Builder */
 
-/**
+${hasModal ? `/*
  * MODAL MANAGEMENT TIPS:
  * - To show a modal:    G3AxonLive.showModal("modalID");
  * - To close a modal:   G3AxonLive.closeModal("modalID");
@@ -1088,6 +1204,7 @@ const app = createApp({
  * You can call these from any client-side onclick handler or via 
  * AxonLive.Trigger("btnID", "onclick") from the server.
  */
+` : ''}
 
 var AxonLive = Server.CreateObject("G3AXONLIVE");
 AxonLive.InitPage();
@@ -1122,8 +1239,7 @@ ${styleBlock}
 
 <div id="main-container">
     <div id="content"${mainContainerStyle}>
-${htmlLayout}
-    </div>
+${htmlLayout}${hiddenFieldsHtml}    </div>
 </div>
 
 ${scriptBlock}

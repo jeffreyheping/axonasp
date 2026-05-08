@@ -10,7 +10,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
     */
-[v-cloak] { display: none; }
+[v-cloak] {
+    display: none;
+}
 
 body {
     margin: 0;
@@ -108,10 +110,11 @@ body {
 .builder-canvas {
     background-color: #FFF;
     min-height: 400px;
-    width: 800px; /* Fixed starting width, but container allows overflow */
+    width: 800px;
+    /* Fixed starting width, but container allows overflow */
     margin: 0 auto;
     border: 1px solid #000;
-    box-shadow: 2px 2px 5px rgba(0,0,0,0.5);
+    box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.5);
     position: relative;
     padding: 10px;
 }
@@ -164,9 +167,25 @@ body {
     background-color: #FFF;
 }
 
-.functional-item.script { background-color: #E1F5FE; border-color: #039BE5; }
-.functional-item.style  { background-color: #F3E5F5; border-color: #7B1FA2; }
-.functional-item.timer  { background-color: #FFF9C4; border-color: #FBC02D; }
+.functional-item.script {
+    background-color: #E1F5FE;
+    border-color: #039BE5;
+}
+
+.functional-item.style {
+    background-color: #F3E5F5;
+    border-color: #7B1FA2;
+}
+
+.functional-item.timer {
+    background-color: #FFF9C4;
+    border-color: #FBC02D;
+}
+
+.functional-item.hiddenfield {
+    background-color: #E8F5E9;
+    border-color: #388E3C;
+}
 
 /* Code Pane States */
 .builder-code-pane {
@@ -241,9 +260,9 @@ body {
     font-style: italic;
 }
 
-.selected-cell { 
-    border: 2px solid #0A246A !important; 
-    background: rgba(10,36,106,0.1); 
+.selected-cell {
+    border: 2px solid #0A246A !important;
+    background: rgba(10, 36, 106, 0.1);
 }
 
 hr {
@@ -263,14 +282,57 @@ hr {
     z-index: 100;
 }
 
-.handle-se { bottom: -5px; right: -5px; cursor: nwse-resize; }
-.handle-sw { bottom: -5px; left: -5px; cursor: nesw-resize; }
-.handle-ne { top: -5px; right: -5px; cursor: nesw-resize; }
-.handle-nw { top: -5px; left: -5px; cursor: nwse-resize; }
-.handle-e  { top: 50%; right: -5px; margin-top: -4px; cursor: e-resize; }
-.handle-w  { top: 50%; left: -5px; margin-top: -4px; cursor: w-resize; }
-.handle-s  { bottom: -5px; left: 50%; margin-left: -4px; cursor: s-resize; }
-.handle-n  { top: -5px; left: 50%; margin-left: -4px; cursor: n-resize; }
+.handle-se {
+    bottom: -5px;
+    right: -5px;
+    cursor: nwse-resize;
+}
+
+.handle-sw {
+    bottom: -5px;
+    left: -5px;
+    cursor: nesw-resize;
+}
+
+.handle-ne {
+    top: -5px;
+    right: -5px;
+    cursor: nesw-resize;
+}
+
+.handle-nw {
+    top: -5px;
+    left: -5px;
+    cursor: nwse-resize;
+}
+
+.handle-e {
+    top: 50%;
+    right: -5px;
+    margin-top: -4px;
+    cursor: e-resize;
+}
+
+.handle-w {
+    top: 50%;
+    left: -5px;
+    margin-top: -4px;
+    cursor: w-resize;
+}
+
+.handle-s {
+    bottom: -5px;
+    left: 50%;
+    margin-left: -4px;
+    cursor: s-resize;
+}
+
+.handle-n {
+    top: -5px;
+    left: 50%;
+    margin-left: -4px;
+    cursor: n-resize;
+}
 
 .builder-properties {
     width: 250px;
@@ -316,7 +378,7 @@ hr {
     position: fixed;
     background: #FFF;
     border: 1px solid #ACA899;
-    box-shadow: 2px 2px 5px rgba(0,0,0,0.2);
+    box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
     z-index: 10000;
     min-width: 150px;
     padding: 2px 0;

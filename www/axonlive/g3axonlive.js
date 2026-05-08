@@ -550,4 +550,43 @@
         }
     };
 
+    /**
+     * Handles a file upload using a specialized fetch request.
+     * Sends multipart/form-data to the server and processes the reactive response.
+     * @param {string} componentId - The target uploader component ID
+     * @param {string} fileInputId - The ID of the input[type=file]
+     * @param {string} eventName   - The event name to fire (e.g. "onupload")
+     */
+    G3AxonLive.uploadFile = function (componentId, fileInputId, eventName) {
+        var input = document.getElementById(fileInputId);
+        if (!input || !input.files || input.files.length === 0) return;
+
+        var formData = new FormData();
+        formData.append('file', input.files[0]);
+        formData.append('g3al_id', componentId);
+        formData.append('g3al_event', eventName);
+        formData.append('g3al_session', this.sessionId);
+
+        this.isProcessing = true;
+        var self = this;
+
+        fetch(window.location.href, {
+            method: 'POST',
+            body: formData,
+            headers: {
+                'X-Requested-With': 'G3AxonLive',
+                'X-G3AL-Upload': 'true'
+            }
+        })
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+            self.isProcessing = false;
+            self.processResponse(data);
+        })
+        .catch(function(err) {
+            self.isProcessing = false;
+            console.error('G3AxonLive: Upload failed:', err);
+        });
+    };
+
 })();
