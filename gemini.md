@@ -27,7 +27,7 @@ The AxonASP project is a high-performance web server and Virtual Machine designe
 
 # 🟢 HOW THE AXONASP JSCRIPT ENGINE WORKS
 
-We are currently building out the JScript (ECMAScript 5) execution engine alongside the VBScript VM. The Agent must understand these specific mechanics for JScript:
+We are currently building out the JScript (ECMAScript 5 with partial support to ECMAScript 6) execution engine alongside the VBScript VM. The Agent must understand these specific mechanics for JScript:
 
 * **AST is Required:** Unlike VBScript, JScript compilation utilizes an Abstract Syntax Tree (AST). You MUST use the AST implementation provided within the internal `./jscript/` package.
 * **Strictly Internal (`./jscript/`):** Refer to the `README.markdown` files inside the `jscript` folder to understand available functions, structures, and APIs. Do not reinvent the wheel if something is already documented there.
@@ -121,6 +121,11 @@ All work occurs within the `axonasp2` directory structure:
 * **Style:** Active voice, simple language, scannable lists, and bold text. NO EMOJIS.
 * **Branding:** Use AxonASP branding. DO NOT use Microsoft names/logos for our functions.
 * **Menu:** Always update `www\manual\menu.md` (using a nested bulleted list) after creating new docs.
+* **Code Examples:** Always provide a complete, copy-pastable code example that can be run immediately. Include the necessary script tags and initialization for AxonLive if applicable.
+* **Documentation of New Errors:** When a new error code is implemented in the libraries or VM, add it to the `www\manual\md\runtime\axonasp-error-codes.md` page with its number, description, and possible causes.
+* **Documentation of New Configurations:** When a new configuration option is added to `config/axonasp.toml`, add it to the `www\manual\md\runtime\configuration.md` page with its name, description, and default value.
+* **Documentation of New Libraries/Functions:** When a new library or function is added, create a new markdown page in `www\manual\md\libraries\` with its name and document its usage, parameters, return values, and examples.
+* **Nomenclature:** Don't use JScript in documentation, use JavaScript instead, as it is more widely recognized by users. Only use "JScript" when specifically referring to the engine or compatibility mode.
 
 ---
 

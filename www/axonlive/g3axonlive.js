@@ -2,7 +2,7 @@
  * G3AxonLive Client Engine v2.0
  * Copyright (C) 2026 G3pix Ltda. All rights reserved.
  *
- * Lean vanilla JavaScript engine for reactive ASP components.
+ * G3Pix AxonASP JavaScript engine for reactive ASP components.
  * Intercepts component events, sends async fetch requests to the server,
  * and performs targeted DOM swaps without full page reloads.
  *
@@ -22,11 +22,14 @@
      * All state and methods are encapsulated to prevent global namespace pollution.
      */
     window.G3AxonLive = {
-        // Session ID transmitted with every fetch request; set via init()
+        // Optional legacy session ID kept for compatibility with existing page templates
         sessionId: null,
 
         // Tracks whether an async fetch operation is currently in flight (debounce guard)
         isProcessing: false,
+
+        // Delegated handlers are attached to document only once per page.
+        handlersAttached: false,
 
         // Endpoint URL for all G3AxonLive fetch requests
         endpoint: '/g3al',
@@ -37,16 +40,12 @@
 
         /**
          * Initialize the G3AxonLive engine on page load.
-         * Must be called with the session ID provided by the server-side framework.
+         * The sessionId argument is optional and retained for backward compatibility.
          * @param {string} sessionId - The user's ASP Session ID
          * @returns {boolean} - True if initialization succeeded
          */
         init: function (sessionId) {
-            if (!sessionId) {
-                console.error('G3AxonLive: sessionId is required for initialization');
-                return false;
-            }
-            this.sessionId = sessionId;
+            this.sessionId = sessionId || null;
             this.attachComponentEventHandlers();
             return true;
         },
@@ -57,6 +56,10 @@
          * Event type is specified by the data-g3al-event attribute (click, change, submit).
          */
         attachComponentEventHandlers: function () {
+            if (this.handlersAttached) {
+                return;
+            }
+
             var self = this;
 
             // Intercept click events on reactive components
@@ -97,6 +100,8 @@
                     self.sendEvent(componentId, eventName, eventArgs);
                 }
             }, true);
+
+            this.handlersAttached = true;
         },
 
         /**
@@ -186,16 +191,10 @@
                 console.warn('G3AxonLive: Event dropped — another request is in flight');
                 return;
             }
-            if (!this.sessionId) {
-                console.error('G3AxonLive: Session ID not initialized — call G3AxonLive.init(sessionId) first');
-                return;
-            }
-
             var self = this;
             this.isProcessing = true;
 
             var payload = {
-                sessionId: this.sessionId,
                 componentId: componentId,
                 eventName: eventName,
                 eventArgs: eventArgs || {}
@@ -286,8 +285,6 @@
                 for (var i = 0; i < response.components.length; i++) {
                     this.applyPatch(response.components[i]);
                 }
-                // Re-attach event handlers after DOM nodes may have been replaced
-                this.attachComponentEventHandlers();
             }
 
             // Execute server-triggered client actions (set_timer, redirect, trigger, add_attribute)
@@ -565,7 +562,6 @@
         formData.append('file', input.files[0]);
         formData.append('g3al_id', componentId);
         formData.append('g3al_event', eventName);
-        formData.append('g3al_session', this.sessionId);
 
         this.isProcessing = true;
         var self = this;
@@ -578,15 +574,15 @@
                 'X-G3AL-Upload': 'true'
             }
         })
-        .then(function(res) { return res.json(); })
-        .then(function(data) {
-            self.isProcessing = false;
-            self.processResponse(data);
-        })
-        .catch(function(err) {
-            self.isProcessing = false;
-            console.error('G3AxonLive: Upload failed:', err);
-        });
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+                self.isProcessing = false;
+                self.processResponse(data);
+            })
+            .catch(function (err) {
+                self.isProcessing = false;
+                console.error('G3AxonLive: Upload failed:', err);
+            });
     };
 
 })();

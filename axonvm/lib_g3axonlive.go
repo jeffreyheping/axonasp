@@ -622,7 +622,16 @@ func (g *G3AXONLIVE) initPage() Value {
 		return Value{Type: VTBool, Num: 1}
 	}
 
-	g.eventSessionID = strings.TrimSpace(event.SessionID)
+	payloadSessionID := strings.TrimSpace(event.SessionID)
+	hostSessionID := ""
+	if sess != nil {
+		hostSessionID = strings.TrimSpace(sess.ID)
+	}
+	if hostSessionID != "" {
+		g.eventSessionID = hostSessionID
+	} else {
+		g.eventSessionID = payloadSessionID
+	}
 	g.eventComponentID = strings.TrimSpace(event.ComponentID)
 	g.eventName = strings.TrimSpace(event.EventName)
 	if event.EventArgs != nil {
@@ -644,7 +653,15 @@ func (g *G3AXONLIVE) initPage() Value {
 // headers when BinaryRead is unavailable or JSON parsing fails.
 func (g *G3AXONLIVE) loadAsyncEventFromForwardHeaders() {
 	req := g.vm.host.Request()
-	g.eventSessionID = strings.TrimSpace(req.ServerVars.Get("HTTP_X_G3AXONLIVE_SESSIONID"))
+	hostSessionID := ""
+	if g.vm.host.Session() != nil {
+		hostSessionID = strings.TrimSpace(g.vm.host.Session().ID)
+	}
+	if hostSessionID != "" {
+		g.eventSessionID = hostSessionID
+	} else {
+		g.eventSessionID = strings.TrimSpace(req.ServerVars.Get("HTTP_X_G3AXONLIVE_SESSIONID"))
+	}
 	g.eventComponentID = strings.TrimSpace(req.ServerVars.Get("HTTP_X_G3AXONLIVE_COMPONENTID"))
 	g.eventName = strings.TrimSpace(req.ServerVars.Get("HTTP_X_G3AXONLIVE_EVENTNAME"))
 

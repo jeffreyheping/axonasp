@@ -6,6 +6,7 @@
     * [Project Structure](md/runtime/project-structure.md)
     * [Use Build Scripts and Options](md/runtime/build-scripts-options.md)
     * [Compilation Library Disable Tags](md/runtime/compilation-library-disable-tags.md)
+    * [WebAssembly (WASM) Support](md/runtime/wasm.md)
     * [Install and Run with Docker](md/runtime/docker-installation.md)
     * [AxonASP Internal Architecture](md/runtime/axonasp-internal-architecture.md)
     * [Use axonasp-testsuite](md/runtime/axonasp-testsuite.md)
@@ -24,6 +25,11 @@
     * [AxonASP Error Code Reference](md/runtime/axonasp-error-codes.md)
 * Configuration
     * [axonasp.toml](md/config/axonasp-toml.md)
+* AxonLive
+    * [Ecosystem Overview](md/axonlive/index.md)
+    * [Basic Page Creation](md/axonlive/getting_started.md)
+    * [The Client-Side Script](md/axonlive/client_script.md)
+    * [AxonLive Builder](md/axonlive/builder.md)
 * ASP Foundations
     * [The #include Directive](md/asp/include.md)
     * [ASP Variables](md/asp/variables.md)
@@ -136,6 +142,35 @@
             * [Axgenerateguid](md/libraries/g3axon/methods/axgenerateguid.md)
             * [Axgetdefaultcss](md/libraries/g3axon/methods/axgetdefaultcss.md)
             * [Axpoweredbyimage](md/libraries/g3axon/methods/axpoweredbyimage.md)
+    * G3AXON.LIVE
+        * [Overview](md/libraries/g3axonlive/overview.md)
+        * [Methods](md/libraries/g3axonlive/methods.md)
+        * [Properties](md/libraries/g3axonlive/properties.md)
+           * Methods Detail
+               * [AddAttribute](md/libraries/g3axonlive/methods/addattribute.md)
+               * [ClearComponentState](md/libraries/g3axonlive/methods/clearcomponentstate.md)
+               * [EndAsyncResponse](md/libraries/g3axonlive/methods/endasyncresponse.md)
+               * [GetComponent](md/libraries/g3axonlive/methods/getcomponent.md)
+               * [GetComponentProperty](md/libraries/g3axonlive/methods/getcomponentproperty.md)
+               * [GetComponentState](md/libraries/g3axonlive/methods/getcomponentstate.md)
+               * [GetEventArg](md/libraries/g3axonlive/methods/geteventarg.md)
+               * [InitPage](md/libraries/g3axonlive/methods/initpage.md)
+               * [Redirect](md/libraries/g3axonlive/methods/redirect.md)
+               * [RegisterComponent](md/libraries/g3axonlive/methods/registercomponent.md)
+               * [RegisterPage](md/libraries/g3axonlive/methods/registerpage.md)
+               * [RemoveComponentProperty](md/libraries/g3axonlive/methods/removecomponentproperty.md)
+               * [RemoveSession](md/libraries/g3axonlive/methods/removesession.md)
+               * [SetComponentProperty](md/libraries/g3axonlive/methods/setcomponentproperty.md)
+               * [SetTimer](md/libraries/g3axonlive/methods/settimer.md)
+               * [StartCleanup](md/libraries/g3axonlive/methods/startcleanup.md)
+               * [StopCleanup](md/libraries/g3axonlive/methods/stopcleanup.md)
+               * [Trigger](md/libraries/g3axonlive/methods/trigger.md)
+           * Properties Detail
+               * [EventArgs](md/libraries/g3axonlive/properties/eventargs.md)
+               * [EventComponentID](md/libraries/g3axonlive/properties/eventcomponentid.md)
+               * [EventName](md/libraries/g3axonlive/properties/eventname.md)
+               * [IsAsyncRequest](md/libraries/g3axonlive/properties/isasyncrequest.md)
+
     * G3CRYPTO
         * [Overview](md/libraries/g3crypto/overview.md)
         * [Methods](md/libraries/g3crypto/methods.md)
@@ -178,16 +213,6 @@
             * [Newobject](md/libraries/g3json/methods/newobject.md)
             * [Parse](md/libraries/g3json/methods/parse.md)
             * [Stringify](md/libraries/g3json/methods/stringify.md)
-    * G3AXONLIVE
-        * [Overview](md/libraries/g3axonlive/overview.md)
-        * G3AxonLive Guides
-            * [Building Reactive Pages](md/libraries/g3axonlive/building-reactive-pages.md)
-            * [Architecture and Lifecycle](md/libraries/g3axonlive/architecture.md)
-            * [Configuration](md/libraries/g3axonlive/configuration.md)
-            * [Troubleshooting](md/libraries/g3axonlive/troubleshooting.md)
-        * API Reference
-            * [Server-Side API](md/libraries/g3axonlive/server-api.md)
-            * [Client-Side API](md/libraries/g3axonlive/client-api.md)
     * G3DB
         * [Overview](md/libraries/g3db/overview.md)
         * [Methods](md/libraries/g3db/methods.md)

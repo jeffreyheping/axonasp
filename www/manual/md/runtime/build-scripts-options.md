@@ -19,13 +19,13 @@ Use:
 Windows PowerShell:
 
 ```powershell
-./build.ps1 [-Platform windows|linux|darwin|all] [-Architecture amd64|arm64|386] [-Clean] [-Test] [-Tags "tag1 tag2"]
+./build.ps1 [-Platform windows|linux|darwin|wasm|all] [-Architecture amd64|arm64|386] [-Clean] [-Test] [-Tags "tag1 tag2"]
 ```
 
 Linux and macOS Bash:
 
 ```bash
-./build.sh [--platform|-p windows|linux|darwin|all] [--arch|-a amd64|arm64|386] [--clean|-c] [--test|-t] [--tags|-g "tag1 tag2"]
+./build.sh [--platform|-p windows|linux|darwin|wasm|all] [--arch|-a amd64|arm64|386] [--clean|-c] [--test|-t] [--tags|-g "tag1 tag2"]
 ```
 
 ## Parameters and Arguments
@@ -114,4 +114,4 @@ Linux and macOS examples:
 
 # Clean and compile with disable tags
 ./build.sh --clean --tags "lib_adodb_disabled,lib_msxml_disabled"
-```
+``````

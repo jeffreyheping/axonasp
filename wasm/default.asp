@@ -41,11 +41,11 @@ Next
         const go = new Go();
         WebAssembly.instantiateStreaming(fetch("axonasp.wasm"), go.importObject).then((result) => {
             go.run(result.instance);
-            document.getElementById("status").innerText = "WASM module ready.";
+            document.getElementById("status").innerText = "AxonASP module ready.";
             document.getElementById("status").style.color = "green";
             document.getElementById("runBtn").disabled = false;
         }).catch((err) => {
-            document.getElementById("status").innerText = "Error loading WASM: " + err;
+            document.getElementById("status").innerText = "Error loading AxonASP module: " + err;
             document.getElementById("status").style.color = "red";
         });
 

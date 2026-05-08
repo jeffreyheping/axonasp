@@ -7,6 +7,8 @@ axonasp-mcp.exe
 # Build output
 build/
 
+.wasm
+
 # Temporary runtime files
 temp/
 www/temp/

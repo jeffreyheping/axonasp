@@ -1320,7 +1320,7 @@ ${scriptBlock}
 
 <script src="/axonlive/g3axonlive.js"></script>
 <script>
-    G3AxonLive.init('<%=Server.HTMLEncode(Session.SessionID)%>');
+    G3AxonLive.init();
 </script>
 </body>
 </html>`;

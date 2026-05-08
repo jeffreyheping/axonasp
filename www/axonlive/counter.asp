@@ -17,22 +17,37 @@
 ' wrapper classes or include files required. All business logic runs
 ' server-side; only the HTML patch is sent to the browser on updates.
 '
+Function RenderCounterLabel(currentCount)
+    Dim className, styleAttr
 
-' ---------------------------------------------------------------------------
-' Step 1 — Create the G3AXONLIVE controller and parse the incoming request.
-'          InitPage() returns True when this is an async event request,
-'          False on a normal full-page load.
-' ---------------------------------------------------------------------------
+    className = "counter-value"
+    styleAttr = ""
+
+    If currentCount < 0 Then
+        className = className & " status-p"
+        styleAttr = " style=""color:red;"""
+    ElseIf currentCount > 0 Then
+        styleAttr = " style=""color:green;"""
+    End If
+
+    RenderCounterLabel = "<span id=""lblCounter"" class=""" & className & """" & styleAttr & ">" & Server.HTMLEncode(CStr(currentCount)) & "</span>"
+End Function
+
+Function RenderResetButton(isDisabled)
+    Dim extraAttrs
+
+    extraAttrs = ""
+    If isDisabled Then
+        extraAttrs = " disabled=""disabled"" title=""Counter is already zero"""
+    End If
+
+    RenderResetButton = "<button id=""btnReset"" class=""btn btn-danger"" data-g3al-id=""btnReset"" data-g3al-event=""click"" data-g3al-event-name=""onclick""" & extraAttrs & ">Reset</button>"
+End Function
+
 Dim AxonLive
 Set AxonLive = Server.CreateObject("G3AXONLIVE")
-
 Call AxonLive.InitPage()
 
-' ---------------------------------------------------------------------------
-' Step 2 — Restore persisted counter state from the process-wide G3AL store.
-'          State is keyed by Session.SessionID so each user has their own
-'          counter, and it survives across async re-executions.
-' ---------------------------------------------------------------------------
 Dim sessionID
 sessionID = Session.SessionID
 
@@ -44,11 +59,6 @@ Else
     count = CLng(count)
 End If
 
-' ---------------------------------------------------------------------------
-' Step 3 — Handle async event. When IsAsyncRequest is True the browser has
-'          sent a JSON event payload via /g3al/. We mutate state, register
-'          the updated component HTML, and flush the JSON patch response.
-' ---------------------------------------------------------------------------
 If AxonLive.IsAsyncRequest Then
     Dim compID : compID = AxonLive.EventComponentID
     Dim evtName : evtName = AxonLive.EventName
@@ -61,145 +71,101 @@ If AxonLive.IsAsyncRequest Then
         count = 0
     End If
 
-    ' Persist updated state
     Call AxonLive.SetComponentProperty(sessionID, "counter", "count", CStr(count))
-
-    ' --- New Feature: Granular DOM manipulation via Proxy Object ---
-    Dim lbl, btnReset
-    Set lbl = AxonLive.GetComponent("lblCounter")
-    Set btnReset = AxonLive.GetComponent("btnReset")
-    
-    ' Update the label value directly without RegisterComponent
-    lbl.value = CStr(count)
-    
-    ' Dynamic styling based on value
-    If count < 0 Then
-        lbl.SetStyle "color", "red"
-        lbl.AddClass "status-p"
-    ElseIf count > 0 Then
-        lbl.SetStyle "color", "green"
-        lbl.RemoveClass "status-p"
-    Else
-        lbl.RemoveAttribute "style" ' Reset to default
-        lbl.RemoveClass "status-p"
-    End If
-    
-    ' Control button state
-    If count = 0 Then
-        btnReset.disabled = True
-        btnReset.AddTitle "Counter is already zero"
-    Else
-        btnReset.disabled = False
-        btnReset.RemoveTitle()
-    End If
-
-    ' Serialize all pending patches to JSON, write the response, and halt.
+    Call AxonLive.RegisterComponent("lblCounter", RenderCounterLabel(count))
+    Call AxonLive.RegisterComponent("btnReset", RenderResetButton(count = 0))
     Call AxonLive.EndAsyncResponse()
 End If
-
-' ---------------------------------------------------------------------------
-' On a full-page load execution continues here to render the complete HTML.
-' ---------------------------------------------------------------------------
 %>
 <!DOCTYPE html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>G3AxonLive Counter - AxonASP</title>
-<link rel="stylesheet" href="/css/axonasp.css">
-<style>
-    .counter-panel {
-        text-align: center;
-        padding: 32px 24px;
-        max-width: 420px;
-        margin: 32px auto;
-    }
-    .counter-value {
-        display: block;
-        font-size: 64px;
-        font-weight: bold;
-        font-family: Tahoma, Verdana, Arial, sans-serif;
-        color: var(--win-blue-dark);
-        margin: 16px 0 24px;
-        line-height: 1;
-    }
-    .counter-actions {
-        display: flex;
-        gap: 10px;
-        justify-content: center;
-        flex-wrap: wrap;
-    }
-</style>
-</head>
-<body>
 
-<div id="header">
-    <span style="color:#fff; font-family:Tahoma,Verdana,Arial,sans-serif; font-size:18px; font-weight:bold; line-height:60px; padding-left:18px;">
-        G3AxonLive &mdash; Reactive Counter (VBScript)
-    </span>
-</div>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>G3AxonLive Counter - AxonASP</title>
+        <link rel="stylesheet" href="/css/axonasp.css">
+        <style>
+            .counter-panel {
+                text-align: center;
+                padding: 32px 24px;
+                max-width: 420px;
+                margin: 32px auto;
+            }
 
-<div id="main-container">
-<div id="content">
+            .counter-value {
+                display: block;
+                font-size: 64px;
+                font-weight: bold;
+                font-family: Tahoma, Verdana, Arial, sans-serif;
+                color: var(--win-blue-dark);
+                margin: 16px 0 24px;
+                line-height: 1;
+            }
 
-<div class="card counter-panel">
-    <h2>Live Counter</h2>
-    <p>Click the buttons to update the counter without a full page reload.<br>
-       All logic runs server-side &mdash; only the changed HTML is returned.</p>
+            .counter-actions {
+                display: flex;
+                gap: 10px;
+                justify-content: center;
+                flex-wrap: wrap;
+            }
+        </style>
+    </head>
 
-    <%
-    ' Render the counter label component.
-    ' The id attribute and data-g3al-id must match the RegisterComponent call above.
-    %>
-    <span id="lblCounter" class="counter-value"><%=count%></span>
+    <body>
 
-    <div class="counter-actions">
-        <button id="btnDecrement"
-                class="btn btn-secondary"
-                data-g3al-id="btnDecrement"
-                data-g3al-event="click"
-                data-g3al-event-name="onclick">
-            &minus; Decrement
-        </button>
-        <button id="btnReset"
-                class="btn btn-danger"
-                data-g3al-id="btnReset"
-                data-g3al-event="click"
-                data-g3al-event-name="onclick">
-            Reset
-        </button>
-        <button id="btnIncrement"
-                class="btn btn-primary"
-                data-g3al-id="btnIncrement"
-                data-g3al-event="click"
-                data-g3al-event-name="onclick">
-            + Increment
-        </button>
-    </div>
-</div>
+        <div id="header">
+            <span
+                style="color:#fff; font-family:Tahoma,Verdana,Arial,sans-serif; font-size:18px; font-weight:bold; line-height:60px; padding-left:18px;">
+                G3AxonLive &mdash; Reactive Counter (VBScript)
+            </span>
+        </div>
 
-<div class="card" style="max-width:420px; margin:0 auto 24px;">
-    <h3>How it works</h3>
-    <ul>
-        <li>On page load, <code>AxonLive.InitPage()</code> registers the session.</li>
-        <li>When a button is clicked, the JS engine POSTs to <code>/g3al/</code>.</li>
-        <li>The server re-runs this page, detects <code>IsAsyncRequest = True</code>,
-            applies the counter mutation, and calls <code>EndAsyncResponse()</code>.</li>
-        <li>The browser replaces only the <code>lblCounter</code> element via <code>outerHTML</code>.</li>
-    </ul>
-</div>
+        <div id="main-container">
+            <div id="content">
 
-</div>
-</div>
+                <div class="card counter-panel">
+                    <h2>Live Counter</h2>
+                    <p>Click the buttons to update the counter without a full page reload.<br>
+                        All logic runs server-side &mdash; only the changed HTML is returned.</p>
 
-<div id="status-bar">AxonASP &mdash; G3AxonLive Counter Example</div>
+                    <%=RenderCounterLabel(count)%>
 
-<script src="/axonlive/g3axonlive.js"></script>
-<script>
-    // Initialize the G3AxonLive engine with the current ASP session ID.
-    // This call enables event interception and fetch-based DOM patching.
-    G3AxonLive.init('<%=Server.HTMLEncode(Session.SessionID)%>');
-</script>
-</body>
+                    <div class="counter-actions">
+                        <button id="btnDecrement" class="btn btn-secondary" data-g3al-id="btnDecrement"
+                            data-g3al-event="click" data-g3al-event-name="onclick">
+                            &minus; Decrement
+                        </button>
+                        <%=RenderResetButton(count = 0)%>
+                        <button id="btnIncrement" class="btn btn-primary" data-g3al-id="btnIncrement"
+                            data-g3al-event="click" data-g3al-event-name="onclick">
+                            + Increment
+                        </button>
+                    </div>
+                </div>
+
+                <div class="card" style="max-width:420px; margin:0 auto 24px;">
+                    <h3>How it works</h3>
+                    <ul>
+                        <li>On page load, <code>AxonLive.InitPage()</code> registers the session.</li>
+                        <li>When a button is clicked, the JS engine POSTs to <code>/g3al/</code>.</li>
+                        <li>The server re-runs this page, detects <code>IsAsyncRequest = True</code>,
+                            applies the counter mutation, and calls <code>EndAsyncResponse()</code>.</li>
+                        <li>The browser replaces the <code>lblCounter</code> and <code>btnReset</code> markup via
+                            <code>outerHTML</code>.
+                        </li>
+                    </ul>
+                </div>
+
+            </div>
+        </div>
+
+        <div id="status-bar">AxonASP &mdash; G3AxonLive Counter Example</div>
+
+        <script src="/axonlive/g3axonlive.js"></script>
+        <script>
+            G3AxonLive.init();
+        </script>
+    </body>
+
 </html>

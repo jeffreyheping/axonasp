@@ -1,4 +1,5 @@
- //go:build wasm
+//go:build wasm
+
 package main
 
 import (
@@ -57,6 +58,6 @@ func main() {
 	}))
 
 	c := make(chan struct{}, 0)
-	println("AxonASP WASM module initialized")
+	println("G3pix ❖ AxonASP initialized")
 	<-c
 }

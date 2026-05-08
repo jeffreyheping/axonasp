@@ -9,6 +9,8 @@
 # Build output
 build/
 
+*.wasm
+
 
 # Code coverage profiles and other test artifacts
 *.out
@@ -61,3 +63,4 @@ temp/
 www/temp/
 axonvm/temp
 axonvm/www
+wasm/axonasp.wasm

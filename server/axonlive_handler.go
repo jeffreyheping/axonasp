@@ -34,7 +34,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/url"
 	"path/filepath"
 	"strings"
 
@@ -134,10 +133,6 @@ func handleG3AxonLiveFetch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if strings.TrimSpace(event.SessionID) == "" {
-		writeG3AlJSONError(w, http.StatusBadRequest, axonvm.AxonASPErrorMessages[axonvm.ErrG3ALInvalidSessionID])
-		return
-	}
 	if strings.TrimSpace(event.ComponentID) == "" {
 		writeG3AlJSONError(w, http.StatusBadRequest, axonvm.AxonASPErrorMessages[axonvm.ErrG3ALInvalidComponentID])
 		return
@@ -147,8 +142,16 @@ func handleG3AxonLiveFetch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Look up which ASP page is registered for this session.
-	scriptURL := resolveG3ALScriptURL(r, event.SessionID)
+	authenticatedSessionID := authenticatedSessionIDFromRequest(r)
+	normalizedSessionID, authorized := normalizeAndAuthorizeG3ALSessionID(event.SessionID, authenticatedSessionID)
+	if !authorized {
+		writeG3AlJSONError(w, http.StatusForbidden, axonvm.AxonASPErrorMessages[axonvm.ErrG3ALInvalidSessionID])
+		return
+	}
+	event.SessionID = normalizedSessionID
+
+	// Look up which ASP page is registered for the authenticated session.
+	scriptURL := resolveG3ALScriptURL(event.SessionID)
 	if scriptURL == "" {
 		writeG3AlJSONError(w, http.StatusNotFound, axonvm.AxonASPErrorMessages[axonvm.ErrG3ALSessionNotRegistered])
 		return
@@ -171,6 +174,7 @@ func handleG3AxonLiveFetch(w http.ResponseWriter, r *http.Request) {
 	r2 := r.Clone(r.Context())
 	r2.Method = http.MethodPost
 	r2.URL.Path = scriptURL
+	normalizedBody, _ := json.Marshal(event)
 	if r2.Header == nil {
 		r2.Header = make(http.Header)
 	}
@@ -180,45 +184,38 @@ func handleG3AxonLiveFetch(w http.ResponseWriter, r *http.Request) {
 	r2.Header.Set("X-G3AxonLive-ComponentId", event.ComponentID)
 	r2.Header.Set("X-G3AxonLive-EventName", event.EventName)
 	r2.Header.Set("X-G3AxonLive-EventArgs", string(eventArgsJSON))
-	r2.Body = io.NopCloser(bytes.NewReader(body))
-	r2.ContentLength = int64(len(body))
+	r2.Body = io.NopCloser(bytes.NewReader(normalizedBody))
+	r2.ContentLength = int64(len(normalizedBody))
 
 	// Execute the ASP page — it detects the X-G3AxonLive header, processes the event,
 	// updates component state, and writes the JSON patch response directly.
 	executeASP(w, r2, absPath)
 }
 
-// resolveG3ALScriptURL resolves the ASP page path for an incoming event.
-// It first uses the payload sessionId, then falls back to ASPSESSIONID cookie,
-// and finally to same-origin Referer path to tolerate registry edge cases.
-func resolveG3ALScriptURL(r *http.Request, sessionID string) string {
-	scriptURL := axonvm.G3ALGetPageForSession(strings.TrimSpace(sessionID))
-	if scriptURL != "" {
-		return scriptURL
-	}
+// resolveG3ALScriptURL resolves the ASP page path for an authenticated session.
+func resolveG3ALScriptURL(sessionID string) string {
+	return axonvm.G3ALGetPageForSession(strings.TrimSpace(sessionID))
+}
 
+// authenticatedSessionIDFromRequest extracts the ASP session ID from the request cookie.
+func authenticatedSessionIDFromRequest(r *http.Request) string {
 	if c, err := r.Cookie("ASPSESSIONID"); err == nil && c != nil {
-		scriptURL = axonvm.G3ALGetPageForSession(strings.TrimSpace(c.Value))
-		if scriptURL != "" {
-			return scriptURL
-		}
-	}
-
-	ref := strings.TrimSpace(r.Referer())
-	if ref == "" {
-		return ""
-	}
-	u, err := url.Parse(ref)
-	if err != nil {
-		return ""
-	}
-	if u.Path == "" || u.Path == g3alEndpoint || u.Path == g3alEndpointNoSlash {
-		return ""
-	}
-	if strings.HasPrefix(u.Path, "/") {
-		return u.Path
+		return strings.TrimSpace(c.Value)
 	}
 	return ""
+}
+
+// normalizeAndAuthorizeG3ALSessionID binds a fetch payload session ID to the authenticated cookie session.
+func normalizeAndAuthorizeG3ALSessionID(payloadSessionID, authenticatedSessionID string) (string, bool) {
+	authID := strings.TrimSpace(authenticatedSessionID)
+	if authID == "" {
+		return "", false
+	}
+	eventID := strings.TrimSpace(payloadSessionID)
+	if eventID != "" && !strings.EqualFold(eventID, authID) {
+		return "", false
+	}
+	return authID, true
 }
 
 // handleG3AxonLiveWebSocket upgrades an HTTP connection to a WebSocket per RFC 6455.
