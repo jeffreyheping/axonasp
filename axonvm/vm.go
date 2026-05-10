@@ -2593,6 +2593,14 @@ aspExecLoop:
 			}
 			vm.push(v)
 
+		case OpJSGetIterator:
+			source := vm.pop()
+			vm.push(vm.jsGetIterator(source))
+
+		case OpJSIteratorNext:
+			itObj := vm.stack[vm.sp]
+			vm.push(vm.jsIteratorNextValue(itObj))
+
 		case OpJSPop:
 			vm.pop()
 

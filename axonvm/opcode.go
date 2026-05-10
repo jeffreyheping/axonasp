@@ -122,6 +122,7 @@ const (
 	OpNewClass // [OpCode, ClassNameConstIdxHigh, ClassNameConstIdxLow]
 	OpArraySet // [OpCode, ArgCountHigh, ArgCountLow] ; stack: [..., targetArray, idx1..idxN, value]
 	OpRet
+
 )
 
 const (
@@ -205,9 +206,12 @@ const (
 	OpJSReturn                 // [OpCode]
 	OpJSLoadUndefined          // [OpCode]
 	OpJSLoadThis               // [OpCode]
-	OpJSDup                    // [OpCode]
-	OpJSRequireObject          // [OpCode] ; throws TypeError if TOS is null or undefined
-	OpJSPop                    // [OpCode]
+	OpJSDup                 // [OpCode]
+	OpJSRequireObject       // [OpCode] ; throws TypeError if TOS is null or undefined
+	OpJSGetIterator         // [OpCode] ; pops RHS, pushes iterator (RHS[Symbol.iterator]())
+	OpJSIteratorNext        // [OpCode] ; peek iterator, call .next(), push value (or undefined if done)
+	OpJSPop                 // [OpCode]
+
 	OpJSJump                   // [OpCode, Target3, Target2, Target1, Target0]
 	OpJSJumpIfFalse            // [OpCode, Target3, Target2, Target1, Target0]
 	OpJSJumpIfTrue             // [OpCode, Target3, Target2, Target1, Target0]
@@ -357,6 +361,7 @@ const (
 	// Format: [OpCode(1), forOfPosB3(1), forOfPosB2(1), forOfPosB1(1), forOfPosB0(1)]
 	// Total: 5 bytes (1 opcode + 4 operand bytes).
 	OpJSForOfCleanup
+
 )
 
 func (op OpCode) String() string {
@@ -523,6 +528,10 @@ func (op OpCode) String() string {
 		return "OpJSDup"
 	case OpJSRequireObject:
 		return "OpJSRequireObject"
+	case OpJSGetIterator:
+		return "OpJSGetIterator"
+	case OpJSIteratorNext:
+		return "OpJSIteratorNext"
 	case OpJSPop:
 		return "OpJSPop"
 	case OpJSJump:

@@ -84,3 +84,71 @@ func TestJScriptDestructuringObjectNull(t *testing.T) {
 		t.Errorf("expected 'True', got %q", out)
 	}
 }
+
+func TestJScriptDestructuringArray(t *testing.T) {
+	out, err := runJScript2(t, jscriptSrc(`
+		var [a, b, c] = [1, 2, 3];
+		Response.Write(a + "|" + b + "|" + c);
+	`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "1|2|3" {
+		t.Errorf("expected '1|2|3', got %q", out)
+	}
+}
+
+func TestJScriptDestructuringArrayNested(t *testing.T) {
+	out, err := runJScript2(t, jscriptSrc(`
+		var [a, [b, c]] = [10, [20, 30]];
+		Response.Write(a + "|" + b + "|" + c);
+	`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "10|20|30" {
+		t.Errorf("expected '10|20|30', got %q", out)
+	}
+}
+
+func TestJScriptDestructuringArrayString(t *testing.T) {
+	out, err := runJScript2(t, jscriptSrc(`
+		var [x, y, z] = "ABC";
+		Response.Write(x + "|" + y + "|" + z);
+	`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "A|B|C" {
+		t.Errorf("expected 'A|B|C', got %q", out)
+	}
+}
+
+func TestJScriptDestructuringArrayElision(t *testing.T) {
+	out, err := runJScript2(t, jscriptSrc(`
+		var [, , x] = [1, 2, 3];
+		Response.Write(x);
+	`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "3" {
+		t.Errorf("expected '3', got %q", out)
+	}
+}
+
+func TestJScriptDestructuringArrayNonIterable(t *testing.T) {
+	out, err := runJScript2(t, jscriptSrc(`
+		try {
+			var [a] = 123;
+		} catch (e) {
+			Response.Write(e.indexOf("not iterable") !== -1);
+		}
+	`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "True" {
+		t.Errorf("expected 'True', got %q", out)
+	}
+}

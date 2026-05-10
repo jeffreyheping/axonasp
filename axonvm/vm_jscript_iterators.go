@@ -15,6 +15,7 @@ import (
 // jsArrayIterator represents the state of an array iterator.
 type jsArrayIterator struct {
 	target Value
+	values []Value // cached values if provided
 	index  int
 	kind   int // 0: values, 1: keys, 2: entries
 }
@@ -39,6 +40,24 @@ func (vm *VM) jsCreateArrayIterator(target Value, kind int) Value {
 		target: target,
 		index:  0,
 		kind:   kind,
+	}
+	return Value{Type: VTJSObject, Num: id}
+}
+
+// jsCreateValuesIterator creates an iterator from a slice of values.
+func (vm *VM) jsCreateValuesIterator(values []Value) Value {
+	id := vm.allocJSID()
+	vm.jsObjectItems[id] = map[string]Value{
+		"__js_type": NewString("Array Iterator"),
+		"__js_ctor": NewString("Array Iterator"),
+	}
+	vm.jsPropertyItems[id] = make(map[string]jsPropertyDescriptor, 2)
+
+	vm.jsArrayIterators[id] = &jsArrayIterator{
+		target: Value{Type: VTJSUndefined},
+		values: values,
+		index:  0,
+		kind:   0,
 	}
 	return Value{Type: VTJSObject, Num: id}
 }
@@ -134,7 +153,10 @@ func (vm *VM) jsArrayIteratorNext(itObj Value) Value {
 	length := 0
 	var values []Value
 
-	if it.target.Type == VTArray && it.target.Arr != nil {
+	if it.values != nil {
+		values = it.values
+		length = len(values)
+	} else if it.target.Type == VTArray && it.target.Arr != nil {
 		values = it.target.Arr.Values
 		length = len(values)
 	} else if it.target.Type == VTJSObject {
@@ -184,4 +206,57 @@ func (vm *VM) jsStringIteratorNext(itObj Value) Value {
 	val := NewString(string(it.runes[it.index]))
 	it.index++
 	return vm.jsIteratorNextResult(val, false)
+}
+
+// jsGetIterator obtains an iterator from an object via Symbol.iterator.
+func (vm *VM) jsGetIterator(source Value) Value {
+	if source.Type == VTNull || source.Type == VTJSUndefined {
+		vm.jsThrowTypeError("Cannot destructure null or undefined")
+		return Value{Type: VTJSUndefined}
+	}
+
+	// Fast paths for basic types
+	if source.Type == VTArray {
+		return vm.jsCreateArrayIterator(source, 0)
+	}
+	if source.Type == VTString {
+		return vm.jsCreateStringIterator(source.Str)
+	}
+
+	itKey := jsSymbolPropertyPrefix + strconv.FormatInt(jsWellKnownSymbolIterator, 10)
+	itFn, _ := vm.jsMemberGet(source, itKey)
+	if itFn.Type != VTJSFunction && itFn.Type != VTJSObject {
+		// Fallback for native types that might not have prototypes yet or are handled specially
+		if source.Type == VTJSObject {
+			class := vm.jsObjectStringProperty(source, "__js_type")
+			if class == "Map" || class == "Set" || jsIsTypedArrayType(class) {
+				vals := vm.jsEnumerateForOfValues(source)
+				return vm.jsCreateValuesIterator(vals)
+			}
+		}
+		vm.jsThrowTypeError("Object is not iterable")
+		return Value{Type: VTJSUndefined}
+	}
+	itObj := vm.jsCall(itFn, source, nil)
+	if itObj.Type != VTJSObject {
+		vm.jsThrowTypeError("Iterator result is not an object")
+		return Value{Type: VTJSUndefined}
+	}
+	return itObj
+}
+
+// jsIteratorNextValue calls .next() on an iterator and returns the yielded value.
+// If the iterator is done, returns undefined.
+func (vm *VM) jsIteratorNextValue(itObj Value) Value {
+	result, handled := vm.jsCallMember(itObj, "next", nil)
+	if !handled || result.Type != VTJSObject {
+		vm.jsThrowTypeError("Iterator result is not an object")
+		return Value{Type: VTJSUndefined}
+	}
+	doneVal, _ := vm.jsMemberGet(result, "done")
+	if vm.jsTruthy(doneVal) {
+		return Value{Type: VTJSUndefined}
+	}
+	val, _ := vm.jsMemberGet(result, "value")
+	return val
 }

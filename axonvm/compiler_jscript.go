@@ -1811,8 +1811,24 @@ func (c *Compiler) compileJScriptDestructuring(target jsast.BindingTarget, isCon
 		}
 		c.emit(OpJSPop) // Pop the source object
 	case *jsast.ArrayPattern:
-		// Phase 5.3: Array Destructuring
-		c.emit(OpJSPop)
+		c.emit(OpJSGetIterator)
+		for _, elt := range t.Elements {
+			c.emit(OpJSIteratorNext)
+			if elt != nil {
+				if bt, ok := elt.(jsast.BindingTarget); ok {
+					c.compileJScriptDestructuring(bt, isConst, isLet, isVar)
+				} else {
+					c.emit(OpJSPop)
+				}
+			} else {
+				// Elision: [,,]
+				c.emit(OpJSPop)
+			}
+		}
+		if t.Rest != nil {
+			// TODO Phase 5.4: Array Rest
+		}
+		c.emit(OpJSPop) // Pop the iterator
 	}
 }
 

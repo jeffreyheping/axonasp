@@ -1112,6 +1112,49 @@ Response.Write(x + y); // Output: 30
 </script>
 ```
 
+### Array Destructuring
+
+Array destructuring allows you to extract elements from arrays or any iterable object (like Strings, Sets, or Maps) using an array-like syntax.
+
+#### Syntax
+
+```javascript
+var [a, b] = iterable;
+var [a, , c] = iterable; // Elision (skipping elements)
+var [a, [b, c]] = iterable; // Nested array destructuring
+```
+
+#### Remarks
+
+- Values are extracted in order from the source iterable.
+- **Elision:** You can skip elements using commas: `var [first, , last] = [1, 2, 3];`.
+- **Iteration Protocol:** Unlike object destructuring, array destructuring works with any object that implements the ES6 Iteration Protocol. This includes Strings (yielding characters), Maps (yielding `[key, value]` pairs), and Sets.
+- **Validation:** Attempting to destructure a non-iterable value (like `true` or a plain object without `[Symbol.iterator]`) raises a `TypeError`.
+
+#### Code Example
+
+```javascript
+<script runat="server" language="JScript">
+// 1. Basic array
+var [first, second] = ["Red", "Green", "Blue"];
+Response.Write(first + "|" + second + "\n"); // Output: Red|Green
+
+// 2. String (iterable)
+var [h, e, l, l2, o] = "Hello";
+Response.Write(h + e + l + l2 + o + "\n"); // Output: Hello
+
+// 3. Nested
+var [a, [b, c]] = [1, [2, 3]];
+Response.Write(a + b + c + "\n"); // Output: 6
+
+// 4. Map (yields [key, value] pairs)
+var map = new Map();
+map.set("id", 42);
+var [[key, val]] = map;
+Response.Write(key + "=" + val + "\n"); // Output: id=42
+</script>
+```
+
 ---
 
 ## Optional Chaining (?.)

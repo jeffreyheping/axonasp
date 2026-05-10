@@ -58,16 +58,16 @@ This document serves as a high-precision checklist for implementing ECMAScript 6
     * [x] **Null/Undefined Check:** The compiled bytecode MUST perform a check. If the RHS is `null` or `undefined`, it must throw a `TypeError` *before* attempting to read properties.
         * [x] **Testing:** Write tests for various object patterns, including nested destructuring and edge cases (e.g., missing properties, null/undefined RHS).
 
-* 🛠️ SUB-PHASE 5.3: Array Destructuring (Iterator-Based)
+* 🛠️ SUB-PHASE 5.3: Array Destructuring (Iterator-Based) [x]
     Now integrate the Iteration Protocol with destructuring.
-    * [ ] **Compiler (`ArrayPattern`):** Update the compiler to recognize `ArrayPattern`.
-    * [ ] **Execution Flow:** For `const [a, b] = iterable`, the compiler must emit instructions to:
+    * [x] **Compiler (`ArrayPattern`):** Update the compiler to recognize `ArrayPattern`.
+    * [x] **Execution Flow:** For `const [a, b] = iterable`, the compiler must emit instructions to:
         1. Get `Symbol.iterator` from the RHS.
         2. Call it to get the iterator object.
         3. Call `.next()` on the iterator. If `done: true`, assign `undefined` to `a`. Else, assign `value` to `a`.
         4. Repeat step 3 for `b`.
-    * [ ] **Fallback:** Throw a `TypeError` if the RHS is not iterable (i.e., `[Symbol.iterator]` is undefined).
-        * [ ] **Testing:** Write tests for array destructuring with various iterables (arrays, strings, custom iterables) and edge cases (e.g., non-iterable RHS).
+    * [x] **Fallback:** Throw a `TypeError` if the RHS is not iterable (i.e., `[Symbol.iterator]` is undefined).
+        * [x] **Testing:** Write tests for array destructuring with various iterables (arrays, strings, custom iterables) and edge cases (e.g., non-iterable RHS).
 
 * 🛠️ SUB-PHASE 5.4: Default Values & Rest Elements (`...`)
     * [ ] **Default Values:** Support `const {x = 10} = obj`. If the loaded property is strictly `undefined`, evaluate and assign the default value.
@@ -145,4 +145,4 @@ This document serves as a high-precision checklist for implementing ECMAScript 6
 6. **Documentation:** Did you update `jscript-es6-support.md` with the new features and any limitations or known issues?
 7. **Testing:** Did you add comprehensive test cases for each new feature in both Go and ASP test files?
 8. **Code Review:** Before finalizing, review the code for any potential performance pitfalls, memory leaks, or edge cases that could arise from the new features.
-9. **Check complete:** [x] Phase 5.2 Object Destructuring task is marked as complete in this file
+9. **Check complete:** [x] Phase 5.3 Array Destructuring task is marked as complete in this file
