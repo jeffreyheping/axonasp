@@ -67,20 +67,20 @@ Core Architecture Note for the Agent: Under the hood, ES6 Classes in JScript are
             * [x] **Static Inheritance:** Set the internal `__proto__` of the subclass constructor itself to `<SuperClass>` to allow inheritance of static methods. Use internal VM assignments (e.g., `vm.jsSetProto`) to avoid Go heap allocation.
             * [x] **Validation:** Create `test_class_extends.asp`. Check if instances inherit methods from the superclass prototype and if the subclass inherits static methods.
     * SUBPHASE 6.6: The `super()` Call in Constructors
-        * [ ] **TDZ for `this`:** In a derived class constructor, `this` is uninitialized until `super()` is called. If `this` is accessed before `super()` completes, the VM must throw a `ReferenceError`.
-        * [ ] **Super Invocation:** Compile `super(...)` as a special call that invokes the parent constructor using `Reflect.construct` logic via `OpNew`, explicitly targeting the extended class.
-        * [ ] **Validation:** Create `test_class_super_constructor.asp`. Test constructor argument passing and verify `ReferenceError` if `this` is used prematurely.
+        * [x] **TDZ for `this`:** In a derived class constructor, `this` is uninitialized until `super()` is called. If `this` is accessed before `super()` completes, the VM must throw a `ReferenceError`.
+        * [x] **Super Invocation:** Compile `super(...)` as a special call that invokes the parent constructor using `Reflect.construct` logic via `OpNew`, explicitly targeting the extended class.
+        * [x] **Validation:** Create `test_class_super_constructor.asp`. Test constructor argument passing and verify `ReferenceError` if `this` is used prematurely.
     * SUBPHASE 6.7: The `super.method()` Call & Home Object Binding
-        * [ ] **Home Object Assignment:** When attaching methods to the prototype, attach a hidden internal VM property `[[HomeObject]]` to the `VTJSFunction` pointing to the object it was bound to. Store this as an integer ID pointing to the VM's `jsObjectItems` array to strictly avoid reflection and Go heap escape.
-        * [ ] **Super Resolution:** Translate `super.foo` to: Get `[[HomeObject]]` -> Get its prototype -> Lookup property `"foo"` -> Call with current `this` context.
-        * [ ] **Validation:** Create `test_class_super_method.asp`. Test complex prototype chains (e.g., `C extends B extends A`).
+        * [x] **Home Object Assignment:** When attaching methods to the prototype, attach a hidden internal VM property `[[HomeObject]]` to the `VTJSFunction` pointing to the object it was bound to. Store this as an integer ID pointing to the VM's `jsObjectItems` array to strictly avoid reflection and Go heap escape.
+        * [x] **Super Resolution:** Translate `super.foo` to: Get `[[HomeObject]]` -> Get its prototype -> Lookup property `"foo"` -> Call with current `this` context.
+        * [x] **Validation:** Create `test_class_super_method.asp`. Test complex prototype chains (e.g., `C extends B extends A`).
     * SUBPHASE 6.8: Final Agent Checklist
-        * [ ] **Gofmt:** Run `gofmt` on all modified files.
-        * [ ] **VBScript Check:** Run `go test ./axonvm -run TestVBScript` to ensure strictly zero regressions on the VBScript side.
-        * [ ] **Memory Profile:** Run `go test -bench . -benchmem` to guarantee no new allocations were introduced in the JScript execution path (Zero-Allocation axiom).
-        * [ ] **Error Codes:** Ensure correct use of error codes from `jscripterrorcodes.go` for syntax/runtime failures.
-        * [ ] all go tests must pass to ensure no regressions and correc behavior of the old and new features.
-        * [ ] **Documentation:** Update `jscript-es6-support.md` reflecting the new capabilities and any limitations.
+        * [x] **Gofmt:** Run `gofmt` on all modified files.
+        * [x] **VBScript Check:** Run `go test ./axonvm -run TestVBScript` to ensure strictly zero regressions on the VBScript side.
+        * [x] **Memory Profile:** Run `go test -bench . -benchmem` to guarantee no new allocations were introduced in the JScript execution path (Zero-Allocation axiom).
+        * [x] **Error Codes:** Ensure correct use of error codes from `jscripterrorcodes.go` for syntax/runtime failures.
+        * [x] all go tests must pass to ensure no regressions and correc behavior of the old and new features.
+        * [x] **Documentation:** Update `jscript-es6-support.md` reflecting the new capabilities and any limitations.
 
 ---
 

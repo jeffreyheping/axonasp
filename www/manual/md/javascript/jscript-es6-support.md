@@ -1245,6 +1245,97 @@ Response.Write(p.name);                   // Output: BOB
 </script>
 ```
 
+### Inheritance with super()
+
+When a class extends another class, you can use the `super()` keyword to invoke the parent class's constructor and `super.method()` to call parent class methods.
+
+#### super() in Derived Class Constructors
+
+The `super()` call must be made before accessing `this` in a derived class constructor. If `this` is accessed before `super()` completes, a `ReferenceError` is thrown (Temporal Dead Zone).
+
+```javascript
+<script runat="server" language="JScript">
+class Animal {
+    constructor(name) {
+        this.name = name;
+    }
+    speak() {
+        return this.name + " makes a sound";
+    }
+}
+
+class Dog extends Animal {
+    constructor(name, breed) {
+        super(name);        // Call parent constructor
+        this.breed = breed;
+    }
+    speak() {
+        return super.speak() + " - woof!";
+    }
+}
+
+var dog = new Dog("Buddy", "Golden Retriever");
+Response.Write(dog.speak()); // Output: Buddy makes a sound - woof!
+</script>
+```
+
+#### super.method() Calls
+
+Use `super.method()` to invoke a method from the parent class. This is useful for extending parent behavior without completely overriding it.
+
+```javascript
+<script runat="server" language="JScript">
+class Calculator {
+    add(a, b) {
+        return a + b;
+    }
+}
+
+class AdvancedCalculator extends Calculator {
+    add(a, b) {
+        var result = super.add(a, b);
+        return result + 10; // Add 10 to the base result
+    }
+}
+
+var calc = new AdvancedCalculator();
+Response.Write(calc.add(5, 3)); // Output: 18 (5 + 3 + 10)
+</script>
+```
+
+#### super Property Access
+
+You can also use `super` to set or access properties on the parent class prototype:
+
+```javascript
+<script runat="server" language="JScript">
+class Base {
+    greet() { return "Hello"; }
+}
+
+class Derived extends Base {
+    greet() {
+        return super.greet() + " World";
+    }
+    setData(val) {
+        super.data = val; // Set on instance via parent
+    }
+}
+
+var d = new Derived();
+Response.Write(d.greet());   // Output: Hello World
+d.setData(42);
+Response.Write(d.data);      // Output: 42
+</script>
+```
+
+#### Remarks
+
+- `super()` **must** be called in a derived class constructor before accessing `this`. Accessing `this` before `super()` throws a `ReferenceError`.
+- `super.method()` resolves the method from the parent class's prototype and calls it with the current `this` context.
+- Multi-level inheritance is fully supported: `class C extends B extends A` works as expected, with each level able to call its parent via `super`.
+- Static methods cannot use `super.method()` unless they are inside a derived static method that explicitly calls a parent static method.
+
 ---
 
 ## Optional Chaining (?.)
