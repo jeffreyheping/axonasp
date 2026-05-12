@@ -248,7 +248,7 @@ func (vm *VM) jsPromiseThen(promise Value, args []Value) Value {
 }
 
 func (vm *VM) jsPromiseCatch(promise Value, args []Value) Value {
-	return vm.jsPromiseThen(promise, []Value{Value{Type: VTJSUndefined}, jsArgOrUndefined(args, 0)})
+	return vm.jsPromiseThen(promise, []Value{{Type: VTJSUndefined}, jsArgOrUndefined(args, 0)})
 }
 
 func (vm *VM) jsPromiseFinally(promise Value, args []Value) Value {

@@ -38,7 +38,7 @@ We threw out the rulebook to achieve extreme performance improvements that will 
 *   **Run ASP Anywhere:** Web server, FastCGI, or the command line! The brand new **CLI with TUI (Text User Interface)** allows you to execute ASP code directly from your terminal. This opens incredible possibilities: run scheduled ASP scripts as background jobs, cron tasks, and powerful system administration tools!
 *   **AI-Ready with MCP:** AxonASP includes a built-in Model Context Protocol (MCP) server. AI agents can now connect directly to your runtime, understand your specific environment, and autonomously author complete ASP pages utilizing all available native functions.
 *   **Test-Driven ASP:** Say goodbye to broken scripts and regressions. The new `axonasp-testsuite` executable allows you to write and run automated test suites directly against your ASP files natively!
-*   **High-Performance JScript (ES5):** AxonASP now includes a dedicated, AST-based JScript engine, derived from Goja. Mostly compliant with ECMAScript 5, it supports JavaScript features like `JSON`, `Array.map/filter`, and strict mode, allowing you to modernize your logic while keeping the ASP infrastructure.
+*   **High-Performance JavaScript (ES5 with most of ES6 features):** AxonASP includes a dedicated, AST-based JavaScript engine, derived from Goja. Compliant with ECMAScript 5 and implementing most of ES6 features, it supports JavaScript features like `JSON`, `Array.map/filter`, and strict mode, allowing you to modernize your logic while keeping the ASP infrastructure, and even mix JavaScript and VBScript in the same page if you want to. This is a game-changer for modernizing legacy applications without a full rewrite. Or if you want to write new applications in ASP but prefer JavaScript, you can do that too!
 
 ---
 
@@ -73,11 +73,13 @@ AxonASP extends Classic ASP with incredibly fast, zero-allocation native Go libr
 *   **G3ZLIB:** Stream fast ZLIB compression and decompression.
 *   **G3TAR:** Create and extract TAR archives seamlessly.
 *   **G3ZSTD:** Utilize ultra-fast Zstandard (ZSTD) compression for maximum performance.
-*   **G3FC:** Quickly find files and extract file metadata across complex directories.
+*   **G3FC:** File compression and safe storage.
 *   **G3MD:** Convert Markdown text into clean HTML instantly.
 *   **G3PDF:** Generate native PDF documents with text, shapes, and images.
 *   **G3SEARCH:** Perform advanced search operations across your data.
 *   **G3FILEUPLOADER:** Securely and easily handle multipart form data and file uploads.
+*   **G3STRINGBUILDER:** Efficiently build and manipulate strings with minimal memory overhead.
+
 
 *(Check out `./www/manual/menu.md` and `./www/manual/md/` for full API details!)*
 

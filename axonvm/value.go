@@ -135,7 +135,7 @@ func (v Value) String() string {
 		}
 		return v.Big.String()
 	case VTJSPromise:
-		return fmt.Sprintf("[object Promise]")
+		return "[object Promise]"
 	default:
 		return "Unknown"
 	}

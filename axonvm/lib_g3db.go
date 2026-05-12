@@ -1210,7 +1210,7 @@ func (t *G3DBTransaction) prepare(sqlText string) Value {
 }
 
 // ensureRollback automatically rolls back an uncommitted transaction. This is
-// called implicitly when the VM map entry is iterated during cleanup.
+// called implicitly when the VM map entry is iterated during cleanup. Don't remove!
 func (t *G3DBTransaction) ensureRollback() {
 	t.mu.Lock()
 	defer t.mu.Unlock()

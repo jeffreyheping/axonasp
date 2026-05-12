@@ -73,7 +73,7 @@ func TestG3TestDispatchAndSummary(t *testing.T) {
 	if res := vm.dispatchNativeCall(obj.Num, "AssertNull", []Value{{Type: VTNull}, NewString("explicit Null should pass")}); !vm.asBool(res) {
 		t.Fatalf("expected null assertion to pass, got %#v", res)
 	}
-	if res := vm.dispatchNativeCall(obj.Num, "AssertNothing", []Value{Value{Type: VTObject, Num: 0}, NewString("Nothing object references should pass")}); !vm.asBool(res) {
+	if res := vm.dispatchNativeCall(obj.Num, "AssertNothing", []Value{{Type: VTObject, Num: 0}, NewString("Nothing object references should pass")}); !vm.asBool(res) {
 		t.Fatalf("expected nothing assertion to pass, got %#v", res)
 	}
 	if res := vm.dispatchNativeCall(obj.Num, "AssertTypeName", []Value{NewString("String"), NewString("abc"), NewString("TypeName(String) should match")}); !vm.asBool(res) {
@@ -82,7 +82,7 @@ func TestG3TestDispatchAndSummary(t *testing.T) {
 	if res := vm.dispatchNativeCall(obj.Num, "AssertLength", []Value{NewInteger(3), NewString("abc"), NewString("string length should be 3")}); !vm.asBool(res) {
 		t.Fatalf("expected length assertion to pass, got %#v", res)
 	}
-	if res := vm.dispatchNativeCall(obj.Num, "AssertCount", []Value{NewInteger(2), Value{Type: VTArray, Arr: NewVBArrayFromValues(0, []Value{NewInteger(1), NewInteger(2)})}, NewString("array count should be 2")}); !vm.asBool(res) {
+	if res := vm.dispatchNativeCall(obj.Num, "AssertCount", []Value{NewInteger(2), {Type: VTArray, Arr: NewVBArrayFromValues(0, []Value{NewInteger(1), NewInteger(2)})}, NewString("array count should be 2")}); !vm.asBool(res) {
 		t.Fatalf("expected count alias assertion to pass, got %#v", res)
 	}
 	if res := vm.dispatchNativeCall(obj.Num, "AssertRaises", []Value{NewString("Err.Raise 13, \"suite\", \"type mismatch\""), NewInteger(13), NewString("Err.Raise should surface explicit numbers")}); !vm.asBool(res) {

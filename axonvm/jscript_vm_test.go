@@ -1358,7 +1358,7 @@ func TestJScriptES5ObjectPrototypeMethods(t *testing.T) {
 	vm.jsPropertyItems[protoID] = map[string]jsPropertyDescriptor{"k": jsDefaultPropertyDescriptor(NewInteger(1))}
 
 	objID := vm.allocJSID()
-	vm.jsObjectItems[objID] = map[string]Value{"x": NewInteger(9), "__js_proto": Value{Type: VTJSObject, Num: protoID}}
+	vm.jsObjectItems[objID] = map[string]Value{"x": NewInteger(9), "__js_proto": {Type: VTJSObject, Num: protoID}}
 	vm.jsPropertyItems[objID] = map[string]jsPropertyDescriptor{"x": jsDefaultPropertyDescriptor(NewInteger(9))}
 
 	obj := Value{Type: VTJSObject, Num: objID}

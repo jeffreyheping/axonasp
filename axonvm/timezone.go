@@ -3,6 +3,7 @@ package axonvm
 import (
 	"strings"
 	"time"
+	 _ "time/tzdata"
 )
 
 // ResolveTimezoneLocation resolves a configured timezone using Go's native time package.
