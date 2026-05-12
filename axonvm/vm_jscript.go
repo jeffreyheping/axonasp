@@ -229,6 +229,8 @@ func (vm *VM) jsImportModule(specifier string) (*jsEnvFrame, bool) {
 	moduleEnv := &jsEnvFrame{parentID: 0, bindings: make(map[string]Value, 16)}
 	vm.jsEnvItems[moduleEnvID] = moduleEnv
 	vm.jsModuleInstances[modulePath] = moduleEnv
+	vm.jsModuleLoading[modulePath] = struct{}{}
+	defer delete(vm.jsModuleLoading, modulePath)
 
 	cache := getExecuteScriptCache()
 	program, loadErr := cache.LoadOrCompileWithMode(modulePath, vm.executionMode)
@@ -256,6 +258,58 @@ func (vm *VM) jsImportModule(specifier string) (*jsEnvFrame, bool) {
 		return finalEnv, true
 	}
 	return moduleEnv, true
+}
+
+func (vm *VM) jsIsModuleLoading(specifier string) bool {
+	modulePath, err := vm.jsResolveModulePath(specifier)
+	if err != nil {
+		return false
+	}
+	_, loading := vm.jsModuleLoading[modulePath]
+	return loading
+}
+
+func (vm *VM) jsGetModuleNamespace(env *jsEnvFrame) Value {
+	if env == nil {
+		return Value{Type: VTJSUndefined}
+	}
+	objID := vm.allocJSID()
+	obj := make(map[string]Value, 8)
+	props := make(map[string]jsPropertyDescriptor, 8)
+	for k, v := range env.bindings {
+		if !strings.HasPrefix(k, jsModuleExportPrefix) {
+			continue
+		}
+		exportName := k[len(jsModuleExportPrefix):]
+		obj[exportName] = v
+		props[exportName] = jsPropertyDescriptor{
+			Value:        v,
+			HasValue:     true,
+			Writable:     false,
+			Enumerable:   true,
+			Configurable: false,
+		}
+	}
+	vm.jsObjectItems[objID] = obj
+	vm.jsPropertyItems[objID] = props
+	return Value{Type: VTJSObject, Num: objID}
+}
+
+func (vm *VM) jsExportAllFromModule(specifier string) {
+	moduleEnv, ok := vm.jsImportModule(specifier)
+	if !ok {
+		return
+	}
+	for k, v := range moduleEnv.bindings {
+		if !strings.HasPrefix(k, jsModuleExportPrefix) {
+			continue
+		}
+		exportName := k[len(jsModuleExportPrefix):]
+		if exportName == "default" {
+			continue
+		}
+		vm.jsSetModuleExport(exportName, v)
+	}
 }
 
 func (vm *VM) jsEval(args []Value) Value {
@@ -2161,10 +2215,45 @@ func (vm *VM) jsSetAliasedArgumentValue(objID int64, key string, value Value) bo
 		return false
 	}
 	env.bindings[paramName] = value
+	if alias.envID == vm.jsActiveEnvID {
+		if slot, convErr := strconv.Atoi(key); convErr == nil && slot >= 0 {
+			idx := vm.fp + slot
+			if idx >= 0 && idx < len(vm.stack) {
+				vm.stack[idx] = value
+			}
+		}
+	}
 	if obj, exists := vm.jsObjectItems[objID]; exists {
 		obj[key] = value
 	}
 	return true
+}
+
+// jsSyncAliasedLocalSlot mirrors a parameter local-slot write to the active env.
+// This keeps non-strict arguments aliasing coherent when params are lowered to local slots.
+func (vm *VM) jsSyncAliasedLocalSlot(slot int, value Value) {
+	if slot < 0 || len(vm.jsCallStack) == 0 {
+		return
+	}
+	frame := vm.jsCallStack[len(vm.jsCallStack)-1]
+	closure, ok := vm.jsFunctionItems[frame.fn.Num]
+	if !ok || closure == nil {
+		return
+	}
+	if slot >= len(closure.params) {
+		return
+	}
+	envID := vm.jsActiveEnvID
+	if envID == 0 {
+		return
+	}
+	env := vm.jsEnvItems[envID]
+	if env == nil {
+		return
+	}
+	name := closure.params[slot]
+	env.bindings[name] = value
+	vm.jsSyncArgumentAliasByParam(envID, name, value)
 }
 
 // jsGetAliasedArgumentValue reads a live argument value from the env frame

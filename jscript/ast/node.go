@@ -496,8 +496,10 @@ type (
 	}
 
 	JSImportSpecifier struct {
-		Imported *Identifier
-		Local    *Identifier
+		Imported    *Identifier
+		Local       *Identifier
+		IsDefault   bool
+		IsNamespace bool
 	}
 
 	ImportDeclaration struct {
@@ -516,6 +518,8 @@ type (
 		Declaration Statement
 		Specifiers  []JSExportSpecifier
 		Source      *StringLiteral
+		IsDefault   bool
+		IsAll       bool
 	}
 )
 

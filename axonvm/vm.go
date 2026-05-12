@@ -377,6 +377,7 @@ type VM struct {
 	jsStringIterators              map[int64]*jsStringIterator
 	jsArrayBuffers                 map[int64][]byte       // backing byte slices for ArrayBuffer objects
 	jsModuleInstances              map[string]*jsEnvFrame // Subphase 8.3: Request-local module registry
+	jsModuleLoading                map[string]struct{}    // Tracks modules currently executing for circular import handling
 	jsPromiseItems                 map[int64]*jsPromiseObject
 	jsGeneratorItems               map[int64]*jsGeneratorObject
 	jsMicrotaskQueue               []func()
@@ -602,6 +603,7 @@ func NewVM(bytecode []byte, constants []Value, globalCount int) *VM {
 		jsStringIterators:              make(map[int64]*jsStringIterator),
 		jsArrayBuffers:                 make(map[int64][]byte),
 		jsModuleInstances:              make(map[string]*jsEnvFrame),
+		jsModuleLoading:                make(map[string]struct{}),
 		jsPromiseItems:                 make(map[int64]*jsPromiseObject),
 		jsGeneratorItems:               make(map[int64]*jsGeneratorObject),
 		jsSymbolGlobalRegistry:         make(map[string]Value),
@@ -888,7 +890,8 @@ func opcodeOperandSize(op OpCode) int {
 		OpJSMemberIndexGet, OpJSMemberIndexSet,
 		OpJSPostMemberIncrement, OpJSPostMemberDecrement, OpJSPreMemberIncrement, OpJSPreMemberDecrement,
 		OpJSLetDeclare, OpJSTDZRegisterLet, OpJSTDZRegisterConst, OpJSConstInitialize, OpJSRot,
-		OpJSSuperMemberGet, OpJSSuperMemberSet, OpJSSuperCallComputedMember:
+		OpJSSuperMemberGet, OpJSSuperMemberSet, OpJSSuperCallComputedMember,
+		OpJSExportAll:
 		return 2
 	// 4-byte operands (for jump targets)
 	case OpJump, OpJumpIfFalse, OpJumpIfTrue, OpGotoLabel,
@@ -956,7 +959,7 @@ func remapExecuteGlobalBytecode(bytecode []byte, constBase int, bytecodeBase int
 			OpJSMemberIndexGet, OpJSMemberIndexSet,
 			OpJSPostMemberIncrement, OpJSPostMemberDecrement, OpJSPreMemberIncrement, OpJSPreMemberDecrement,
 			OpJSLetDeclare, OpJSTDZRegisterLet, OpJSTDZRegisterConst, OpJSConstInitialize, OpJSIncLocalInt, OpJSDecLocalInt,
-			OpJSSuperMemberGet, OpJSSuperMemberSet:
+			OpJSSuperMemberGet, OpJSSuperMemberSet, OpJSExportAll:
 			idx := int(binary.BigEndian.Uint16(bytecode[ip:])) + constBase
 			binary.BigEndian.PutUint16(bytecode[ip:], uint16(idx))
 			ip += 2
@@ -2839,7 +2842,8 @@ aspExecLoop:
 			vm.ip += 2
 			specCount := int(binary.BigEndian.Uint16(vm.bytecode[vm.ip:]))
 			vm.ip += 2
-			moduleEnv, ok := vm.jsImportModule(vm.constants[moduleIdx].Str)
+			moduleSpecifier := vm.constants[moduleIdx].Str
+			moduleEnv, ok := vm.jsImportModule(moduleSpecifier)
 			if !ok {
 				// Keep bytecode cursor consistent even after import failure.
 				for i := 0; i < specCount; i++ {
@@ -2847,6 +2851,7 @@ aspExecLoop:
 				}
 				continue
 			}
+			moduleLoading := vm.jsIsModuleLoading(moduleSpecifier)
 			for i := 0; i < specCount; i++ {
 				importedIdx := binary.BigEndian.Uint16(vm.bytecode[vm.ip:])
 				vm.ip += 2
@@ -2854,10 +2859,18 @@ aspExecLoop:
 				vm.ip += 2
 				importedName := vm.constants[importedIdx].Str
 				localName := vm.constants[localIdx].Str
-				exportKey := vm.jsModuleExportKey(importedName)
-				value, exists := moduleEnv.bindings[exportKey]
-				if !exists {
-					value = Value{Type: VTJSUndefined}
+				var value Value
+				if importedName == "*" {
+					value = vm.jsGetModuleNamespace(moduleEnv)
+				} else {
+					exportKey := vm.jsModuleExportKey(importedName)
+					var exists bool
+					value, exists = moduleEnv.bindings[exportKey]
+					if !exists && !moduleLoading {
+						vm.jsThrowReferenceError("The module '" + vm.constants[moduleIdx].Str + "' does not provide an export named '" + importedName + "'")
+					} else if !exists {
+						value = Value{Type: VTJSUndefined}
+					}
 				}
 				vm.jsDeclareName(localName)
 				vm.jsSetName(localName, value)
@@ -2871,6 +2884,11 @@ aspExecLoop:
 			localName := vm.constants[localIdx].Str
 			exportName := vm.constants[exportIdx].Str
 			vm.jsSetModuleExport(exportName, vm.jsGetName(localName))
+
+		case OpJSExportAll:
+			moduleIdx := binary.BigEndian.Uint16(vm.bytecode[vm.ip:])
+			vm.ip += 2
+			vm.jsExportAllFromModule(vm.constants[moduleIdx].Str)
 
 		case OpJSRootFrameEnter:
 			localCount := int(binary.BigEndian.Uint16(vm.bytecode[vm.ip:]))
@@ -2906,35 +2924,47 @@ aspExecLoop:
 			offset := binary.BigEndian.Uint16(vm.bytecode[vm.ip:])
 			vm.ip += 2
 			slot := vm.fp + int(offset)
-			vm.stack[slot] = vm.pop()
+			val := vm.pop()
+			vm.stack[slot] = val
+			vm.jsSyncAliasedLocalSlot(int(offset), val)
 
 		case OpJSIncLocal:
 			offset := binary.BigEndian.Uint16(vm.bytecode[vm.ip:])
 			vm.ip += 2
 			slot := vm.fp + int(offset)
+			var val Value
 			v := &vm.stack[slot]
 			switch v.Type {
 			case VTInteger:
 				v.Num++
+				val = *v
 			case VTDouble:
 				v.Flt++
+				val = *v
 			default:
-				vm.stack[slot] = vm.jsIncrementNumberValue(*v)
+				val = vm.jsIncrementNumberValue(*v)
+				vm.stack[slot] = val
 			}
+			vm.jsSyncAliasedLocalSlot(int(offset), val)
 
 		case OpJSDecLocal:
 			offset := binary.BigEndian.Uint16(vm.bytecode[vm.ip:])
 			vm.ip += 2
 			slot := vm.fp + int(offset)
+			var val Value
 			v := &vm.stack[slot]
 			switch v.Type {
 			case VTInteger:
 				v.Num--
+				val = *v
 			case VTDouble:
 				v.Flt--
+				val = *v
 			default:
-				vm.stack[slot] = vm.jsDecrementNumberValue(*v)
+				val = vm.jsDecrementNumberValue(*v)
+				vm.stack[slot] = val
 			}
+			vm.jsSyncAliasedLocalSlot(int(offset), val)
 
 		case OpJSMemberGet:
 			nameIdx := binary.BigEndian.Uint16(vm.bytecode[vm.ip:])

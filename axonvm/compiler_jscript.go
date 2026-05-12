@@ -534,7 +534,11 @@ func (c *Compiler) compileJScriptImportDeclaration(node *jsast.ImportDeclaration
 	for i := 0; i < specCount; i++ {
 		importedName := ""
 		localName := ""
-		if node.Specifiers[i].Imported != nil {
+		if node.Specifiers[i].IsDefault {
+			importedName = "default"
+		} else if node.Specifiers[i].IsNamespace {
+			importedName = "*"
+		} else if node.Specifiers[i].Imported != nil {
 			importedName = node.Specifiers[i].Imported.Name.String()
 		}
 		if node.Specifiers[i].Local != nil {
@@ -588,6 +592,54 @@ func (c *Compiler) emitJScriptExport(localName string, exportName string) {
 
 func (c *Compiler) compileJScriptExportDeclaration(node *jsast.ExportDeclaration) {
 	if node == nil {
+		return
+	}
+
+	if node.IsDefault {
+		if node.Declaration != nil {
+			names := jsCollectDeclarationBindingNames(node.Declaration)
+			if len(names) > 0 {
+				c.compileJScriptStatement(node.Declaration)
+				c.emitJScriptExport(names[0], "default")
+			} else {
+				localAlias := fmt.Sprintf("__js_export_default_tmp__%d", c.tempCounter)
+				c.tempCounter++
+				c.emit(OpJSDeclareName, c.addConstant(NewString(localAlias)))
+				if fn, ok := node.Declaration.(*jsast.FunctionDeclaration); ok {
+					c.compileJScriptFunctionLiteral(fn.Function, "", false)
+				} else if cl, ok := node.Declaration.(*jsast.ClassDeclaration); ok {
+					c.compileJScriptClassLiteral(cl.Class)
+				} else if ex, ok := node.Declaration.(*jsast.ExpressionStatement); ok {
+					c.compileJScriptExpression(ex.Expression)
+				} else {
+					// Fallback
+					c.compileJScriptStatement(node.Declaration)
+					c.emit(OpJSLoadUndefined) // Should not happen for valid ES6
+				}
+				c.emit(OpJSSetName, c.addConstant(NewString(localAlias)))
+				c.emitJScriptExport(localAlias, "default")
+			}
+		}
+		return
+	}
+
+	if node.IsAll && node.Source != nil {
+		if len(node.Specifiers) == 1 {
+			exportName := node.Specifiers[0].Exported.Name.String()
+			localAlias := fmt.Sprintf("__js_export_ns_tmp__%d", c.tempCounter)
+			c.tempCounter++
+			imp := &jsast.ImportDeclaration{
+				Source: node.Source,
+				Specifiers: []jsast.JSImportSpecifier{
+					{Local: &jsast.Identifier{Name: jsunistring.String(localAlias)}, IsNamespace: true},
+				},
+			}
+			c.compileJScriptImportDeclaration(imp)
+			c.emitJScriptExport(localAlias, exportName)
+		} else {
+			moduleIdx := c.addConstant(NewString(node.Source.Value.String()))
+			c.emit(OpJSExportAll, moduleIdx)
+		}
 		return
 	}
 
@@ -1174,6 +1226,14 @@ func (c *Compiler) compileJScriptForInStatement(node *jsast.ForInStatement) {
 
 	c.compileJScriptExpression(node.Source)
 	nameIdx := c.addConstant(NewString(varName))
+	localForInSlot := -1
+	if c.jsLocalEnabled && declareName && !isLexical {
+		if slot, ok := c.jsResolveLocalSlot(varName); ok {
+			localForInSlot = slot
+		} else {
+			localForInSlot = c.jsDeclareFunctionLocal(varName)
+		}
+	}
 
 	// Lexical for-in: create outer block scope
 	if isLexical {
@@ -1193,6 +1253,12 @@ func (c *Compiler) compileJScriptForInStatement(node *jsast.ForInStatement) {
 	}
 
 	loopCtx.loopStart = c.emitJSForIn(nameIdx)
+	if localForInSlot >= 0 {
+		// OpJSForIn assigns via jsSetName; mirror into local slot so loop bodies lowered
+		// to OpJSGetLocal observe the current key on each iteration.
+		c.emit(OpJSGetName, nameIdx)
+		c.emit(OpJSSetLocal, localForInSlot)
+	}
 
 	if node.Body != nil {
 		c.compileJScriptStatement(node.Body)
@@ -1854,8 +1920,8 @@ func (c *Compiler) compileJScriptAssignment(node *jsast.AssignExpression) {
 		}
 		nameIdx := c.addConstant(NewString(name))
 		localSlot, hasLocal := c.jsResolveLocalSlot(name)
-		c.compileJScriptExpression(node.Right)
 		if node.Operator == jstoken.ASSIGN {
+			c.compileJScriptExpression(node.Right)
 			c.emit(OpJSDup)
 			if hasLocal {
 				c.emit(OpJSSetLocal, localSlot)
@@ -1864,6 +1930,43 @@ func (c *Compiler) compileJScriptAssignment(node *jsast.AssignExpression) {
 			}
 			return
 		}
+		if hasLocal {
+			switch node.Operator {
+			case jstoken.ADD_ASSIGN, jstoken.PLUS:
+				c.emit(OpJSGetLocal, localSlot)
+				c.compileJScriptExpression(node.Right)
+				c.emit(OpJSAdd)
+			case jstoken.SUBTRACT_ASSIGN, jstoken.MINUS:
+				c.emit(OpJSGetLocal, localSlot)
+				c.compileJScriptExpression(node.Right)
+				c.emit(OpJSSubtract)
+			case jstoken.MULTIPLY_ASSIGN, jstoken.MULTIPLY:
+				c.emit(OpJSGetLocal, localSlot)
+				c.compileJScriptExpression(node.Right)
+				c.emit(OpJSMultiply)
+			case jstoken.QUOTIENT_ASSIGN, jstoken.SLASH:
+				c.emit(OpJSGetLocal, localSlot)
+				c.compileJScriptExpression(node.Right)
+				c.emit(OpJSDivide)
+			case jstoken.REMAINDER_ASSIGN, jstoken.REMAINDER:
+				c.emit(OpJSGetLocal, localSlot)
+				c.compileJScriptExpression(node.Right)
+				c.emit(OpJSModulo)
+			case jstoken.EXPONENT_ASSIGN, jstoken.EXPONENT:
+				c.emit(OpJSGetLocal, localSlot)
+				c.compileJScriptExpression(node.Right)
+				c.emit(OpJSExponent)
+			default:
+				c.compileJScriptExpression(node.Right)
+				c.emit(OpJSSetName, nameIdx)
+				return
+			}
+			c.emit(OpJSDup)
+			c.emit(OpJSSetLocal, localSlot)
+			c.emit(OpJSLoadUndefined)
+			return
+		}
+		c.compileJScriptExpression(node.Right)
 		switch node.Operator {
 		case jstoken.ADD_ASSIGN, jstoken.PLUS:
 			c.emit(OpJSAddAssign, nameIdx)

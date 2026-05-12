@@ -473,6 +473,9 @@ const (
 	// Format: [OpCode(1), forOfPosB3(1), forOfPosB2(1), forOfPosB1(1), forOfPosB0(1)]
 	// Total: 5 bytes (1 opcode + 4 operand bytes).
 	OpJSForOfCleanup
+	// OpJSExportAll exports all members from a module source into the current module.
+	// [OpCode, ModuleConstIdxHigh, ModuleConstIdxLow]
+	OpJSExportAll
 )
 
 func (op OpCode) String() string {
@@ -907,6 +910,8 @@ func (op OpCode) String() string {
 		return "OpJSForOf"
 	case OpJSForOfCleanup:
 		return "OpJSForOfCleanup"
+	case OpJSExportAll:
+		return "OpJSExportAll"
 	default:
 		return "OpUnknown"
 	}
