@@ -369,8 +369,10 @@ Call RunLoop(10)
 
 // ---- JScript OpJSJumpIfLessFast ----
 
-// TestJSJumpIfLessFastEmitted verifies that the compiler emits OpJSJumpIfLessFast
-// for the canonical ascending for-loop pattern `for (var i = 0; i < N; i++)`.
+// TestJSJumpIfLessFastEmitted verifies that the compiler emits a fast comparison
+// opcode for the canonical ascending for-loop pattern `for (var i = 0; i < N; i++)`.
+// With the full var fast-int loop optimisation the entire loop is absorbed into a
+// single OpJSForFastInt opcode; otherwise OpJSJumpIfLessFast is expected.
 func TestJSJumpIfLessFastEmitted(t *testing.T) {
 	src := `<%@ Language="JScript" %>
 <%
@@ -386,13 +388,13 @@ Response.Write(sum);
 	}
 	hasFast := false
 	for _, b := range comp.Bytecode() {
-		if OpCode(b) == OpJSJumpIfLessFast {
+		if OpCode(b) == OpJSJumpIfLessFast || OpCode(b) == OpJSForFastInt {
 			hasFast = true
 			break
 		}
 	}
 	if !hasFast {
-		t.Fatal("expected OpJSJumpIfLessFast in bytecode for `i < numericLiteral` test")
+		t.Fatal("expected OpJSJumpIfLessFast or OpJSForFastInt in bytecode for `i < numericLiteral` test")
 	}
 }
 

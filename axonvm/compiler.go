@@ -1384,6 +1384,11 @@ func (c *Compiler) emit(op OpCode, operands ...int) int {
 		// Inline cache slot reserved for VM monomorphic call-site caching.
 		c.bytecode = append(c.bytecode, 0, 0, 0, 0)
 	}
+	if op == OpJSMemberGet || op == OpJSMemberSet {
+		// Reserve 8-byte monomorphic inline cache payload:
+		// shapeID(4), slot(2), flags(2).
+		c.bytecode = append(c.bytecode, 0, 0, 0, 0, 0, 0, 0, 0)
+	}
 
 	return pos
 }

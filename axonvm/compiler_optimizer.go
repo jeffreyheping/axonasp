@@ -123,6 +123,8 @@ func isCompileTimeFalseValue(v Value) bool {
 		return v.Flt == 0
 	case VTEmpty, VTNull:
 		return true
+	case VTJSUndefined:
+		return true
 	case VTString:
 		return v.Str == ""
 	case VTObject:

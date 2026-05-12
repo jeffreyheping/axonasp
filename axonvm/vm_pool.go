@@ -673,6 +673,24 @@ func (vm *VM) ensureDynamicMaps() {
 	if vm.jsObjectItems == nil {
 		vm.jsObjectItems = make(map[int64]map[string]Value)
 	}
+	if vm.jsObjectSlots == nil {
+		vm.jsObjectSlots = make(map[int64][]Value)
+	}
+	if vm.jsObjectSlotIndex == nil {
+		vm.jsObjectSlotIndex = make(map[int64]map[string]uint16)
+	}
+	if vm.jsObjectShape == nil {
+		vm.jsObjectShape = make(map[int64]uint32)
+	}
+	if vm.jsShapeSlots == nil {
+		vm.jsShapeSlots = make(map[uint32][]string)
+	}
+	if vm.jsShapeBySignature == nil {
+		vm.jsShapeBySignature = make(map[string]uint32)
+	}
+	if vm.jsNextShapeID == 0 {
+		vm.jsNextShapeID = 1
+	}
 	if vm.jsObjectStateItems == nil {
 		vm.jsObjectStateItems = make(map[int64]jsObjectState)
 	}
@@ -755,6 +773,12 @@ func (vm *VM) resetDynamicMaps() {
 	clear(vm.dictionaryItems)
 	clear(vm.nativeObjectProxies)
 	clear(vm.jsObjectItems)
+	clear(vm.jsObjectSlots)
+	clear(vm.jsObjectSlotIndex)
+	clear(vm.jsObjectShape)
+	clear(vm.jsShapeSlots)
+	clear(vm.jsShapeBySignature)
+	vm.jsNextShapeID = 1
 	clear(vm.jsObjectStateItems)
 	clear(vm.jsPropertyItems)
 	clear(vm.jsFunctionItems)

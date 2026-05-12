@@ -415,3 +415,218 @@ func BenchmarkJScriptTopLevelFallbackCapture100K(b *testing.B) {
 		`%>`
 	benchmarkASPExecutionOnly(b, source)
 }
+
+// TestJScriptForLetNonZeroInitFastPath verifies that `for (let i = N; i < M; i++)`
+// with a non-zero initial value still uses the fast-int opcode.
+func TestJScriptForLetNonZeroInitFastPath(t *testing.T) {
+	source := `<%@ Language="JScript" %><%` +
+		`var sum = 0;` +
+		`for (let i = 5; i < 10; i++) { sum = sum + i; }` +
+		`Response.Write(sum);` +
+		`%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	hasFastInt := false
+	for i := 0; i < len(compiler.Bytecode()); i++ {
+		if OpCode(compiler.Bytecode()[i]) == OpJSForFastInt {
+			hasFastInt = true
+			break
+		}
+	}
+	if !hasFastInt {
+		t.Fatal("expected OpJSForFastInt for let i=5; i<10; i++ loop")
+	}
+	out := runASPSourceForTest(t, source)
+	// 5+6+7+8+9 = 35
+	if out != "35" {
+		t.Fatalf("unexpected output: got %q want 35", out)
+	}
+}
+
+// TestJScriptForLetLessEqualFastPath verifies that `for (let i = 0; i <= N; i++)`
+// uses the fast-int opcode (limit stored as N+1 internally).
+func TestJScriptForLetLessEqualFastPath(t *testing.T) {
+	source := `<%@ Language="JScript" %><%` +
+		`var sum = 0;` +
+		`for (let i = 0; i <= 9; i++) { sum = sum + i; }` +
+		`Response.Write(sum);` +
+		`%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	hasFastInt := false
+	for i := 0; i < len(compiler.Bytecode()); i++ {
+		if OpCode(compiler.Bytecode()[i]) == OpJSForFastInt {
+			hasFastInt = true
+			break
+		}
+	}
+	if !hasFastInt {
+		t.Fatal("expected OpJSForFastInt for let i=0; i<=9; i++ loop")
+	}
+	out := runASPSourceForTest(t, source)
+	// 0+1+...+9 = 45
+	if out != "45" {
+		t.Fatalf("unexpected output: got %q want 45", out)
+	}
+}
+
+// TestJScriptForVarFastPath verifies that `for (var i = N; i < M; i++)`
+// uses the fast-int opcode path even though var is used.
+func TestJScriptForVarFastPath(t *testing.T) {
+	source := `<%@ Language="JScript" %><%` +
+		`var sum = 0;` +
+		`for (var i = 0; i < 10; i++) { sum = sum + i; }` +
+		`Response.Write(sum);` +
+		`%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	hasFastInt := false
+	for j := 0; j < len(compiler.Bytecode()); j++ {
+		if OpCode(compiler.Bytecode()[j]) == OpJSForFastInt {
+			hasFastInt = true
+			break
+		}
+	}
+	if !hasFastInt {
+		t.Fatal("expected OpJSForFastInt for var i=0; i<10; i++ loop")
+	}
+	out := runASPSourceForTest(t, source)
+	// 0+1+...+9 = 45
+	if out != "45" {
+		t.Fatalf("unexpected output: got %q want 45", out)
+	}
+}
+
+// TestJScriptForVarNonZeroInitFastPath verifies `for (var i = 1; i <= N; i++)` uses fast-int.
+func TestJScriptForVarNonZeroInitFastPath(t *testing.T) {
+	source := `<%@ Language="JScript" %><%` +
+		`var sum = 0;` +
+		`for (var i = 1; i <= 10; i++) { sum = sum + i; }` +
+		`Response.Write(sum);` +
+		`%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	hasFastInt := false
+	for j := 0; j < len(compiler.Bytecode()); j++ {
+		if OpCode(compiler.Bytecode()[j]) == OpJSForFastInt {
+			hasFastInt = true
+			break
+		}
+	}
+	if !hasFastInt {
+		t.Fatal("expected OpJSForFastInt for var i=1; i<=10; i++ loop")
+	}
+	out := runASPSourceForTest(t, source)
+	// 1+2+...+10 = 55
+	if out != "55" {
+		t.Fatalf("unexpected output: got %q want 55", out)
+	}
+}
+
+// TestJScriptForVarVisibleAfterLoop verifies that `var` loop counter is accessible
+// after the loop with its final value (correct var scoping, unlike let).
+func TestJScriptForVarVisibleAfterLoop(t *testing.T) {
+	source := `<%@ Language="JScript" %><%` +
+		`for (var i = 1; i <= 5; i++) {}` +
+		`Response.Write(i);` +
+		`%>`
+
+	out := runASPSourceForTest(t, source)
+	// After loop, i should be 6 (last failed test: 6 > 5)
+	if out != "6" {
+		t.Fatalf("var loop counter after loop: got %q want 6", out)
+	}
+}
+
+// TestJScriptForVarLessEqualLargeLoop verifies correctness of the var <= fast path
+// for the benchmark-style loop pattern from test.asp.
+func TestJScriptForVarLessEqualLargeLoop(t *testing.T) {
+	source := jscriptSrc(
+		`var count = 0;` +
+			`for (var i = 1; i <= 1000000; i++) { count++; }` +
+			`Response.Write(count);`,
+	)
+	out, err := runJScript2(t, source)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out != "1000000" {
+		t.Fatalf("unexpected output: got %q want 1000000", out)
+	}
+}
+
+// TestJScriptNumericComparisonFastPaths exercises integer and float comparisons
+// directly to guard the fast paths added in jsLess / jsLessEqual / etc.
+func TestJScriptNumericComparisonFastPaths(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"int lt int true", `Response.Write(1 < 2 ? "y" : "n");`, "y"},
+		{"int lt int false", `Response.Write(2 < 1 ? "y" : "n");`, "n"},
+		{"int le int true", `Response.Write(2 <= 2 ? "y" : "n");`, "y"},
+		{"int le int false", `Response.Write(3 <= 2 ? "y" : "n");`, "n"},
+		{"int gt int true", `Response.Write(3 > 2 ? "y" : "n");`, "y"},
+		{"int gt int false", `Response.Write(2 > 3 ? "y" : "n");`, "n"},
+		{"int ge int true", `Response.Write(2 >= 2 ? "y" : "n");`, "y"},
+		{"int ge int false", `Response.Write(1 >= 2 ? "y" : "n");`, "n"},
+		{"float lt float", `Response.Write(1.5 < 2.5 ? "y" : "n");`, "y"},
+		{"int lt float", `Response.Write(1 < 1.5 ? "y" : "n");`, "y"},
+		{"float lt int", `Response.Write(0.5 < 1 ? "y" : "n");`, "y"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := runJScript2(t, jscriptSrc(tt.src))
+			if err != nil {
+				t.Fatalf("error: %v", err)
+			}
+			if out != tt.want {
+				t.Fatalf("got %q want %q", out, tt.want)
+			}
+		})
+	}
+}
+
+// BenchmarkJScriptVarLessEqual1M benchmarks the common ASP pattern:
+// for (var i = 1; i <= 1000000; i++) — the exact loop from test.asp.
+func BenchmarkJScriptVarLessEqual1M(b *testing.B) {
+	source := jscriptSrc(
+		`var sum = 0;` +
+			`for (var i = 1; i <= 1000000; i++) { sum = sum + i; }` +
+			`Response.Write(sum);`,
+	)
+	benchmarkASPExecutionOnly(b, source)
+}
+
+// BenchmarkJScriptLetLessEqual1M benchmarks `for (let i = 1; i <= 1000000; i++)`.
+func BenchmarkJScriptLetLessEqual1M(b *testing.B) {
+	source := jscriptSrc(
+		`var sum = 0;` +
+			`for (let i = 1; i <= 1000000; i++) { sum = sum + i; }` +
+			`Response.Write(sum);`,
+	)
+	benchmarkASPExecutionOnly(b, source)
+}
+
+// BenchmarkJScriptLetLessZeroInit1M benchmarks the original fast-int pattern.
+func BenchmarkJScriptLetLessZeroInit1M(b *testing.B) {
+	source := jscriptSrc(
+		`var sum = 0;` +
+			`for (let i = 0; i < 1000000; i++) { sum = sum + i; }` +
+			`Response.Write(sum);`,
+	)
+	benchmarkASPExecutionOnly(b, source)
+}

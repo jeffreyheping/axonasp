@@ -358,6 +358,12 @@ type VM struct {
 	dictionaryItems                map[int64]*scriptingDictionary
 	nativeObjectProxies            map[int64]nativeObjectProxy
 	jsObjectItems                  map[int64]map[string]Value
+	jsObjectSlots                  map[int64][]Value
+	jsObjectSlotIndex              map[int64]map[string]uint16
+	jsObjectShape                  map[int64]uint32
+	jsShapeSlots                   map[uint32][]string
+	jsShapeBySignature             map[string]uint32
+	jsNextShapeID                  uint32
 	jsObjectStateItems             map[int64]jsObjectState
 	jsPropertyItems                map[int64]map[string]jsPropertyDescriptor
 	jsFunctionItems                map[int64]*jsFunctionObject
@@ -573,6 +579,12 @@ func NewVM(bytecode []byte, constants []Value, globalCount int) *VM {
 		dictionaryItems:                make(map[int64]*scriptingDictionary),
 		nativeObjectProxies:            make(map[int64]nativeObjectProxy),
 		jsObjectItems:                  make(map[int64]map[string]Value),
+		jsObjectSlots:                  make(map[int64][]Value),
+		jsObjectSlotIndex:              make(map[int64]map[string]uint16),
+		jsObjectShape:                  make(map[int64]uint32),
+		jsShapeSlots:                   make(map[uint32][]string),
+		jsShapeBySignature:             make(map[string]uint32),
+		jsNextShapeID:                  1,
 		jsObjectStateItems:             make(map[int64]jsObjectState),
 		jsPropertyItems:                make(map[int64]map[string]jsPropertyDescriptor),
 		jsFunctionItems:                make(map[int64]*jsFunctionObject),
@@ -860,7 +872,7 @@ func opcodeOperandSize(op OpCode) int {
 		OpArgGlobalRef, OpArgLocalRef,
 		OpLetGlobal, OpLetLocal, OpIncLocalInt, OpDecLocalInt, OpIncGlobalInt, OpDecGlobalInt, OpJSIncLocalInt, OpJSDecLocalInt,
 		OpCall,
-		OpJSDeclareName, OpJSGetName, OpJSSetName, OpJSGetLocal, OpJSSetLocal, OpJSIncLocal, OpJSDecLocal, OpJSMemberGet, OpJSMemberSet,
+		OpJSDeclareName, OpJSGetName, OpJSSetName, OpJSGetLocal, OpJSSetLocal, OpJSIncLocal, OpJSDecLocal,
 		OpJSRootFrameEnter, OpJSRootFrameLeave,
 		OpJSCreateClosure, OpJSCall, OpJSTailCall, OpJSNewArray, OpJSDelete, OpJSSuperCall,
 		OpJSNew, OpJSMemberDelete, OpJSPostIncrement, OpJSPostDecrement, OpJSPreIncrement, OpJSPreDecrement,
@@ -892,6 +904,9 @@ func opcodeOperandSize(op OpCode) int {
 	// 8-byte operands
 	case OpCallMember:
 		return 8
+	// 10-byte operands: nameConstIdx(2) + inline cache payload(8)
+	case OpJSMemberGet, OpJSMemberSet:
+		return 10
 	// 6-byte operands: classNameIdx(2) + fieldNameIdx(2) + isPublic(2)
 	case OpRegisterClassField:
 		return 6
@@ -927,7 +942,7 @@ func remapExecuteGlobalBytecode(bytecode []byte, constBase int, bytecodeBase int
 		ip++
 		switch op {
 		case OpConstant, OpWriteStatic, OpGetClassMember, OpSetClassMember, OpEraseClassMember, OpMemberSet, OpMemberSetSet, OpNewClass, OpLetClassMember, OpArgClassMemberRef,
-			OpJSDeclareName, OpJSGetName, OpJSSetName, OpJSMemberGet, OpJSMemberSet, OpJSCreateClosure, OpJSDelete,
+			OpJSDeclareName, OpJSGetName, OpJSSetName, OpJSCreateClosure, OpJSDelete,
 			OpJSNew, OpJSMemberDelete, OpJSPostIncrement, OpJSPostDecrement, OpJSPreIncrement, OpJSPreDecrement,
 			OpJSAddAssign, OpJSSubtractAssign, OpJSMultiplyAssign, OpJSDivideAssign, OpJSModuloAssign,
 			OpJSExponentAssign, OpJSLogicalAndAssign, OpJSLogicalOrAssign, OpJSCoalesceAssign,
@@ -938,6 +953,10 @@ func remapExecuteGlobalBytecode(bytecode []byte, constBase int, bytecodeBase int
 			idx := int(binary.BigEndian.Uint16(bytecode[ip:])) + constBase
 			binary.BigEndian.PutUint16(bytecode[ip:], uint16(idx))
 			ip += 2
+		case OpJSMemberGet, OpJSMemberSet:
+			idx := int(binary.BigEndian.Uint16(bytecode[ip:])) + constBase
+			binary.BigEndian.PutUint16(bytecode[ip:], uint16(idx))
+			ip += 10
 		case OpJSRot, OpJSSuperCall, OpJSCall, OpJSTailCall, OpJSNewArray, OpJSSuperCallComputedMember:
 			ip += 2
 		case OpJSDefineProperty:
@@ -2843,7 +2862,17 @@ aspExecLoop:
 		case OpJSMemberGet:
 			nameIdx := binary.BigEndian.Uint16(vm.bytecode[vm.ip:])
 			vm.ip += 2
+			cachePos := vm.ip
+			cachedShape := binary.BigEndian.Uint32(vm.bytecode[cachePos:])
+			cachedSlot := binary.BigEndian.Uint16(vm.bytecode[cachePos+4:])
+			cachedFlags := binary.BigEndian.Uint16(vm.bytecode[cachePos+6:])
+			vm.ip += 8
 			target := vm.pop()
+			if value, ok := vm.jsICMemberGet(target, vm.constants[nameIdx].Str, cachedShape, cachedSlot, cachedFlags); ok {
+				vm.push(value)
+				continue
+			}
+			vm.jsICPopulate(cachePos, target, vm.constants[nameIdx].Str)
 			if value, deferred := vm.jsMemberGet(target, vm.constants[nameIdx].Str); !deferred {
 				vm.push(value)
 			}
@@ -2851,9 +2880,18 @@ aspExecLoop:
 		case OpJSMemberSet:
 			nameIdx := binary.BigEndian.Uint16(vm.bytecode[vm.ip:])
 			vm.ip += 2
+			cachePos := vm.ip
+			cachedShape := binary.BigEndian.Uint32(vm.bytecode[cachePos:])
+			cachedSlot := binary.BigEndian.Uint16(vm.bytecode[cachePos+4:])
+			cachedFlags := binary.BigEndian.Uint16(vm.bytecode[cachePos+6:])
+			vm.ip += 8
 			value := vm.pop()
 			target := vm.pop()
+			if vm.jsICMemberSet(target, vm.constants[nameIdx].Str, value, cachedShape, cachedSlot, cachedFlags) {
+				continue
+			}
 			vm.jsMemberSet(target, vm.constants[nameIdx].Str, value)
+			vm.jsICPopulate(cachePos, target, vm.constants[nameIdx].Str)
 
 		case OpJSCall:
 			argCount := int(binary.BigEndian.Uint16(vm.bytecode[vm.ip:]))
@@ -3079,6 +3117,9 @@ aspExecLoop:
 		case OpJSNewObject:
 			objID := vm.allocJSID()
 			vm.jsObjectItems[objID] = make(map[string]Value, 8)
+			vm.jsObjectSlots[objID] = make([]Value, 0, 8)
+			vm.jsObjectSlotIndex[objID] = make(map[string]uint16, 8)
+			vm.jsObjectShape[objID] = 0
 			vm.jsPropertyItems[objID] = make(map[string]jsPropertyDescriptor, 8)
 			vm.push(Value{Type: VTJSObject, Num: objID})
 

@@ -687,6 +687,39 @@ func (c *Compiler) compileJScriptForStatement(node *jsast.ForStatement) {
 		}
 	}
 
+	// Fast path for `var` integer loops: `for (var i = N; i < M; i++)` or `<= M`.
+	// The counter variable is stored in a local slot so all loop-variable accesses
+	// (body and update) use OpJSGetLocal/OpJSSetLocal instead of the env hash map.
+	// The variable persists after the loop with its final value (correct var scoping).
+	fastIntVarCounterName := ""
+	fastIntVarCounterSlot := -1
+	fastIntVarLimitSlot := -1
+	fastIntVarLimitValue := int64(0)
+	fastIntVarEnabled := false
+	if !fastIntEnabled {
+		var varOK bool
+		fastIntVarCounterName, fastIntVarLimitValue, varOK = c.detectJSForFastVarIntLoop(node)
+		if varOK {
+			// Obtain or create a local slot for the counter variable.
+			// Prefer the existing slot from jsDeclareFunctionLocal (function scope).
+			// Fall back to jsDeclareCurrentLocal for top-level blocks (root scope).
+			counterSlot := c.jsDeclareFunctionLocal(fastIntVarCounterName)
+			if counterSlot < 0 {
+				counterSlot = c.jsDeclareCurrentLocal(fastIntVarCounterName)
+			}
+			if counterSlot >= 0 {
+				fastIntVarCounterSlot = counterSlot
+				limitHiddenName := fmt.Sprintf("__js_for_fastvar_limit__%d_%d", len(c.bytecode), c.jsLocalSlotCount)
+				fastIntVarLimitSlot = c.jsDeclareCurrentLocal(limitHiddenName)
+				if fastIntVarLimitSlot < 0 {
+					fastIntVarCounterSlot = -1
+				} else {
+					fastIntVarEnabled = true
+				}
+			}
+		}
+	}
+
 	// Track whether we have a lexical (let/const) for-loop declaration
 	var forIterNameIdxs []int
 	var forIterNames []string
@@ -697,9 +730,12 @@ func (c *Compiler) compileJScriptForStatement(node *jsast.ForStatement) {
 	// Compile init expression
 	if node.Initializer != nil {
 		if fastIntEnabled {
+			// let fast path: emit the integer initializer directly and store limit.
 			if init, ok := node.Initializer.(*jsast.ForLoopInitializerLexicalDecl); ok && len(init.LexicalDeclaration.List) == 1 {
 				binding := init.LexicalDeclaration.List[0]
-				if name, ok := jsBindingIdentifierName(binding.Target); ok && name == fastIntCounterName && binding.Initializer != nil && jsIsNumericZeroLiteral(binding.Initializer) {
+				name, nameOK := jsBindingIdentifierName(binding.Target)
+				_, initIntOK := jsNumericLiteralInt64(binding.Initializer)
+				if nameOK && name == fastIntCounterName && binding.Initializer != nil && initIntOK {
 					c.compileJScriptExpression(binding.Initializer)
 					c.emit(OpJSSetLocal, fastIntCounterSlot)
 					c.emit(OpConstant, c.addConstant(NewInteger(fastIntLimitValue)))
@@ -718,7 +754,31 @@ func (c *Compiler) compileJScriptForStatement(node *jsast.ForStatement) {
 			}
 		}
 
-		if !fastIntEnabled {
+		if !fastIntEnabled && fastIntVarEnabled {
+			// var fast path: the counter slot was already declared by detection.
+			// Emit the initializer into the counter slot and the limit into the hidden slot.
+			if init, ok := node.Initializer.(*jsast.ForLoopInitializerVarDeclList); ok && len(init.List) == 1 {
+				binding := init.List[0]
+				name, nameOK := jsBindingIdentifierName(binding.Target)
+				_, initIntOK := jsNumericLiteralInt64(binding.Initializer)
+				if nameOK && name == fastIntVarCounterName && binding.Initializer != nil && initIntOK {
+					c.compileJScriptExpression(binding.Initializer)
+					c.emit(OpJSSetLocal, fastIntVarCounterSlot)
+					c.emit(OpConstant, c.addConstant(NewInteger(fastIntVarLimitValue)))
+					c.emit(OpJSSetLocal, fastIntVarLimitSlot)
+				} else {
+					fastIntVarEnabled = false
+					fastIntVarCounterSlot = -1
+					fastIntVarLimitSlot = -1
+				}
+			} else {
+				fastIntVarEnabled = false
+				fastIntVarCounterSlot = -1
+				fastIntVarLimitSlot = -1
+			}
+		}
+
+		if !fastIntEnabled && !fastIntVarEnabled {
 			switch init := node.Initializer.(type) {
 			case *jsast.ForLoopInitializerExpression:
 				c.compileJScriptExpression(init.Expression)
@@ -808,8 +868,23 @@ func (c *Compiler) compileJScriptForStatement(node *jsast.ForStatement) {
 			c.emit(OpJSGetLocal, fastIntLimitSlot)
 			c.emit(OpJSLess)
 			jumpExit = c.emitJSJump(OpJSJumpIfFalse)
+		} else if fastIntVarEnabled {
+			// var fast path: same fused structure as the let path.
+			c.bytecode = append(c.bytecode,
+				byte(OpJSForFastIntEnter),
+				byte(fastIntVarCounterSlot>>8), byte(fastIntVarCounterSlot),
+				byte(fastIntVarLimitSlot>>8), byte(fastIntVarLimitSlot),
+			)
+			c.emit(OpJSGetLocal, fastIntVarCounterSlot)
+			c.emit(OpJSGetLocal, fastIntVarLimitSlot)
+			c.emit(OpJSLess)
+			jumpExit = c.emitJSJump(OpJSJumpIfFalse)
 		} else {
-			if bin, ok := node.Test.(*jsast.BinaryExpression); ok && bin.Operator == jstoken.LESS {
+			// Fused fast path for `identifier < numericLiteral` or `identifier <= numericLiteral`
+			// when the identifier resolves to a local slot.  This avoids the full expression
+			// compiler for the most common ascending-loop test patterns.
+			if bin, ok := node.Test.(*jsast.BinaryExpression); ok &&
+				(bin.Operator == jstoken.LESS || bin.Operator == jstoken.LESS_OR_EQUAL) {
 				if id, ok := bin.Left.(*jsast.Identifier); ok {
 					if slot, hasLocal := c.jsResolveLocalSlot(id.Name.String()); hasLocal {
 						if num, isNum := bin.Right.(*jsast.NumberLiteral); isNum {
@@ -826,7 +901,11 @@ func (c *Compiler) compileJScriptForStatement(node *jsast.ForStatement) {
 								jumpExit = c.emitJSJump(OpJSJumpIfFalse)
 								goto jsForTestDone
 							}
-							c.emit(OpJSLess)
+							if bin.Operator == jstoken.LESS {
+								c.emit(OpJSLess)
+							} else {
+								c.emit(OpJSLessEqual)
+							}
 							jumpExit = c.emitJSJump(OpJSJumpIfFalse)
 							goto jsForTestDone
 						}
@@ -860,7 +939,7 @@ func (c *Compiler) compileJScriptForStatement(node *jsast.ForStatement) {
 	if node.Body != nil {
 		c.compileJScriptStatement(node.Body)
 	}
-	if fastIntEnabled && len(c.bytecode) == bodyStart {
+	if (fastIntEnabled || fastIntVarEnabled) && len(c.bytecode) == bodyStart {
 		c.emit(OpNop)
 	}
 
@@ -879,6 +958,7 @@ func (c *Compiler) compileJScriptForStatement(node *jsast.ForStatement) {
 	if fastIntEnabled {
 		c.jsPopLocalScope()
 	}
+	// Note: no scope pop for fastIntVarEnabled — var remains visible after the loop.
 
 	// Mark update target: continue statements jump here (after per-iteration scope exit).
 	updateTarget := len(c.bytecode)
@@ -886,6 +966,8 @@ func (c *Compiler) compileJScriptForStatement(node *jsast.ForStatement) {
 	// Compile update expression
 	if fastIntEnabled {
 		updateTarget = c.emitJSForFastInt(fastIntCounterSlot, fastIntLimitSlot, bodyStart)
+	} else if fastIntVarEnabled {
+		updateTarget = c.emitJSForFastInt(fastIntVarCounterSlot, fastIntVarLimitSlot, bodyStart)
 	} else if node.Update != nil {
 		handled, pushesResult := c.compileJScriptForUpdateFastPath(node.Update)
 		if !handled {
@@ -897,7 +979,7 @@ func (c *Compiler) compileJScriptForStatement(node *jsast.ForStatement) {
 	}
 
 	// Jump back to test
-	if !fastIntEnabled {
+	if !fastIntEnabled && !fastIntVarEnabled {
 		c.emitJSJumpTo(OpJSJump, loopCtx.loopStart)
 	}
 
@@ -1248,6 +1330,16 @@ func (c *Compiler) emitJSJumpIfLessFast(nameIdx, limitIdx int) int {
 	return pos + 5
 }
 
+// emitJSMemberGet emits one IC-enabled JScript member-get opcode.
+func (c *Compiler) emitJSMemberGet(nameIdx int) {
+	c.emit(OpJSMemberGet, nameIdx)
+}
+
+// emitJSMemberSet emits one IC-enabled JScript member-set opcode.
+func (c *Compiler) emitJSMemberSet(nameIdx int) {
+	c.emit(OpJSMemberSet, nameIdx)
+}
+
 func (c *Compiler) emitJSForIn(nameIdx int) int {
 	pos := len(c.bytecode)
 	c.bytecode = append(c.bytecode, byte(OpJSForIn), 0, 0, 0, 0, 0, 0)
@@ -1391,7 +1483,7 @@ func (c *Compiler) compileJScriptExpression(expr jsast.Expression) {
 			return
 		}
 		c.compileJScriptExpression(node.Left)
-		c.emit(OpJSMemberGet, c.addConstant(NewString(node.Identifier.Name.String())))
+		c.emitJSMemberGet(c.addConstant(NewString(node.Identifier.Name.String())))
 	case *jsast.BracketExpression:
 		if _, ok := node.Left.(*jsast.SuperExpression); ok {
 			c.compileJScriptExpression(node.Member)
@@ -1417,7 +1509,7 @@ func (c *Compiler) compileJScriptExpression(expr jsast.Expression) {
 						c.emit(OpJSGetName, c.addConstant(NewString(key)))
 					}
 				}
-				c.emit(OpJSMemberSet, c.addConstant(NewString(key)))
+				c.emitJSMemberSet(c.addConstant(NewString(key)))
 			case *jsast.PropertyKeyed:
 				if prop.Computed {
 					// Computed property: { [expr]: value }
@@ -1443,11 +1535,11 @@ func (c *Compiler) compileJScriptExpression(expr jsast.Expression) {
 				c.compileJScriptExpression(prop.Value)
 				switch prop.Kind {
 				case jsast.PropertyKindGet:
-					c.emit(OpJSMemberSet, c.addConstant(NewString(jsAccessorGetterPrefix+key)))
+					c.emitJSMemberSet(c.addConstant(NewString(jsAccessorGetterPrefix + key)))
 				case jsast.PropertyKindSet:
-					c.emit(OpJSMemberSet, c.addConstant(NewString(jsAccessorSetterPrefix+key)))
+					c.emitJSMemberSet(c.addConstant(NewString(jsAccessorSetterPrefix + key)))
 				default:
-					c.emit(OpJSMemberSet, c.addConstant(NewString(key)))
+					c.emitJSMemberSet(c.addConstant(NewString(key)))
 				}
 			}
 		}
@@ -1678,7 +1770,7 @@ func (c *Compiler) compileJScriptAssignment(node *jsast.AssignExpression) {
 		}
 		c.compileJScriptExpression(left.Left)
 		c.compileJScriptExpression(node.Right)
-		c.emit(OpJSMemberSet, c.addConstant(NewString(left.Identifier.Name.String())))
+		c.emitJSMemberSet(c.addConstant(NewString(left.Identifier.Name.String())))
 		c.emit(OpJSLoadUndefined)
 	case *jsast.BracketExpression:
 		if _, ok := left.Left.(*jsast.SuperExpression); ok {
@@ -1896,8 +1988,11 @@ func jsIsNumericZeroLiteral(expr jsast.Expression) bool {
 	return ok && value == 0
 }
 
-// detectJSForFastIntLoop checks whether a JScript for-loop matches the canonical
-// `for (let i = 0; i < N; i++)` shape that can use the fused local-slot opcode.
+// detectJSForFastIntLoop checks whether a JScript for-loop matches the fast integer
+// loop shape: `for (let i = N; i < M; i++)` or `for (let i = N; i <= M; i++)`.
+// N can be any integer literal. For `<=`, limitValue is returned as M+1 (exclusive
+// upper bound) so the caller stores it and uses `<` semantics via OpJSForFastInt.
+// Returns (counterName, limitValue, ok) where limitValue is the exclusive upper bound.
 func (c *Compiler) detectJSForFastIntLoop(node *jsast.ForStatement) (counterName string, limitValue int64, ok bool) {
 	if node == nil || !c.jsLocalEnabled || node.Initializer == nil || node.Test == nil || node.Update == nil {
 		return "", 0, false
@@ -1914,11 +2009,16 @@ func (c *Compiler) detectJSForFastIntLoop(node *jsast.ForStatement) (counterName
 	}
 	binding := init.LexicalDeclaration.List[0]
 	name, isName := jsBindingIdentifierName(binding.Target)
-	if !isName || binding.Initializer == nil || !jsIsNumericZeroLiteral(binding.Initializer) {
+	// Accept any integer literal as the initial value (not only 0).
+	if !isName || binding.Initializer == nil {
+		return "", 0, false
+	}
+	if _, initOK := jsNumericLiteralInt64(binding.Initializer); !initOK {
 		return "", 0, false
 	}
 	bin, isBin := node.Test.(*jsast.BinaryExpression)
-	if !isBin || bin.Operator != jstoken.LESS {
+	// Accept both `<` and `<=` test conditions.
+	if !isBin || (bin.Operator != jstoken.LESS && bin.Operator != jstoken.LESS_OR_EQUAL) {
 		return "", 0, false
 	}
 	leftID, isLeftID := bin.Left.(*jsast.Identifier)
@@ -1928,6 +2028,72 @@ func (c *Compiler) detectJSForFastIntLoop(node *jsast.ForStatement) (counterName
 	limit, isLimit := jsNumericLiteralInt64(bin.Right)
 	if !isLimit {
 		return "", 0, false
+	}
+	// For `<=`, convert to exclusive upper bound (i <= N → i < N+1).
+	if bin.Operator == jstoken.LESS_OR_EQUAL {
+		if limit == math.MaxInt64 {
+			// Overflow guard: cannot represent N+1, fall back to generic path.
+			return "", 0, false
+		}
+		limit++
+	}
+	update, isUpdate := node.Update.(*jsast.UnaryExpression)
+	if !isUpdate || update.Operator != jstoken.INCREMENT {
+		return "", 0, false
+	}
+	updateID, isUpdateID := update.Operand.(*jsast.Identifier)
+	if !isUpdateID || updateID.Name.String() != name {
+		return "", 0, false
+	}
+	return name, limit, true
+}
+
+// detectJSForFastVarIntLoop checks whether a JScript for-loop using a `var`
+// declaration matches a fast integer loop shape:
+// `for (var i = N; i < M; i++)` or `for (var i = N; i <= M; i++)`
+// where N and M are integer literals and jsLocalEnabled is active.
+// Unlike detectJSForFastIntLoop (which handles `let`), this path reuses the
+// function-local or root-scope slot for the counter so the value persists
+// after the loop (correct `var` scoping behaviour).
+// Returns (counterName, limitValue, ok) where limitValue is the exclusive upper bound.
+// Slot allocation happens in the compiler, not here, to avoid early side-effects.
+func (c *Compiler) detectJSForFastVarIntLoop(node *jsast.ForStatement) (counterName string, limitValue int64, ok bool) {
+	if node == nil || !c.jsLocalEnabled || node.Initializer == nil || node.Test == nil || node.Update == nil {
+		return "", 0, false
+	}
+	if jsStatementContainsNestedFunction(node.Body) {
+		return "", 0, false
+	}
+	init, isVarDecl := node.Initializer.(*jsast.ForLoopInitializerVarDeclList)
+	if !isVarDecl || len(init.List) != 1 {
+		return "", 0, false
+	}
+	binding := init.List[0]
+	name, isName := jsBindingIdentifierName(binding.Target)
+	if !isName || binding.Initializer == nil {
+		return "", 0, false
+	}
+	if _, initOK := jsNumericLiteralInt64(binding.Initializer); !initOK {
+		return "", 0, false
+	}
+	bin, isBin := node.Test.(*jsast.BinaryExpression)
+	if !isBin || (bin.Operator != jstoken.LESS && bin.Operator != jstoken.LESS_OR_EQUAL) {
+		return "", 0, false
+	}
+	leftID, isLeftID := bin.Left.(*jsast.Identifier)
+	if !isLeftID || leftID.Name.String() != name {
+		return "", 0, false
+	}
+	limit, isLimit := jsNumericLiteralInt64(bin.Right)
+	if !isLimit {
+		return "", 0, false
+	}
+	// For `<=`, convert to exclusive upper bound (i <= N → i < N+1).
+	if bin.Operator == jstoken.LESS_OR_EQUAL {
+		if limit == math.MaxInt64 {
+			return "", 0, false
+		}
+		limit++
 	}
 	update, isUpdate := node.Update.(*jsast.UnaryExpression)
 	if !isUpdate || update.Operator != jstoken.INCREMENT {
@@ -3046,7 +3212,7 @@ func (c *Compiler) compileJScriptDestructuring(target jsast.Expression, isConst 
 				excludedStatic = append(excludedStatic, name)
 				nameIdx := c.addConstant(NewString(name))
 				c.emit(OpJSDup)
-				c.emit(OpJSMemberGet, nameIdx)
+				c.emitJSMemberGet(nameIdx)
 				if p.Initializer != nil {
 					jump := c.emitJSJump(OpJSJumpIfNotUndefined)
 					c.emit(OpJSPop)
@@ -3067,7 +3233,7 @@ func (c *Compiler) compileJScriptDestructuring(target jsast.Expression, isConst 
 						key = lit.Value.String()
 					}
 					excludedStatic = append(excludedStatic, key)
-					c.emit(OpJSMemberGet, c.addConstant(NewString(key)))
+					c.emitJSMemberGet(c.addConstant(NewString(key)))
 				}
 				c.compileJScriptDestructuring(p.Value, isConst, isLet, isVar)
 			}
@@ -3395,7 +3561,7 @@ func (c *Compiler) compileJScriptClassLiteral(node *jsast.ClassLiteral) {
 
 		if !md.Static {
 			// Instance method: bind to constructor.prototype
-			c.emit(OpJSMemberGet, c.addConstant(NewString("prototype")))
+			c.emitJSMemberGet(c.addConstant(NewString("prototype")))
 		}
 
 		// Compile the method/accessor body
@@ -3439,7 +3605,7 @@ func (c *Compiler) compileJScriptClassLiteral(node *jsast.ClassLiteral) {
 				name = lit.Value.String()
 			}
 			if name != "" {
-				c.emit(OpJSMemberSet, c.addConstant(NewString(name)))
+				c.emitJSMemberSet(c.addConstant(NewString(name)))
 			}
 		}
 	}
@@ -3461,7 +3627,7 @@ func (c *Compiler) compileJScriptClassFields() {
 				name = lit.Value.String()
 			}
 			if name != "" {
-				c.emit(OpJSMemberSet, c.addConstant(NewString(name)))
+				c.emitJSMemberSet(c.addConstant(NewString(name)))
 			}
 		}
 	}

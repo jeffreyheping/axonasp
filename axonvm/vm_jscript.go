@@ -21,6 +21,7 @@
 package axonvm
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -338,6 +339,159 @@ func (vm *VM) jsSetProto(target Value, proto Value) {
 		vm.jsObjectItems[id] = obj
 	}
 	obj["__js_proto"] = proto
+	vm.jsInvalidateObjectIC(id)
+}
+
+// jsInvalidateObjectIC discards one object's slot/layout metadata.
+func (vm *VM) jsInvalidateObjectIC(objID int64) {
+	delete(vm.jsObjectShape, objID)
+	delete(vm.jsObjectSlots, objID)
+	delete(vm.jsObjectSlotIndex, objID)
+}
+
+func (vm *VM) jsEnsureObjectICLayout(objID int64) bool {
+	obj, ok := vm.jsObjectItems[objID]
+	if !ok {
+		return false
+	}
+	keys := make([]string, 0, len(obj))
+	for key := range obj {
+		if strings.HasPrefix(key, jsInternalPropPrefix) {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	var shapeSig strings.Builder
+	for i := 0; i < len(keys); i++ {
+		if i > 0 {
+			shapeSig.WriteByte('\x1f')
+		}
+		shapeSig.WriteString(keys[i])
+	}
+
+	shapeID := vm.jsShapeBySignature[shapeSig.String()]
+	if shapeID == 0 {
+		shapeID = vm.jsNextShapeID
+		if shapeID == 0 {
+			shapeID = 1
+		}
+		vm.jsNextShapeID = shapeID + 1
+		vm.jsShapeBySignature[shapeSig.String()] = shapeID
+		if len(keys) > 0 {
+			layout := make([]string, len(keys))
+			copy(layout, keys)
+			vm.jsShapeSlots[shapeID] = layout
+		}
+	}
+
+	slots := make([]Value, len(keys))
+	indexByName := make(map[string]uint16, len(keys))
+	for i := 0; i < len(keys); i++ {
+		k := keys[i]
+		slots[i] = obj[k]
+		indexByName[k] = uint16(i)
+	}
+
+	vm.jsObjectShape[objID] = shapeID
+	vm.jsObjectSlots[objID] = slots
+	vm.jsObjectSlotIndex[objID] = indexByName
+	return true
+}
+
+func (vm *VM) jsResolveICSlot(target Value, member string) (uint32, uint16, bool) {
+	if target.Type != VTJSObject && target.Type != VTJSFunction {
+		return 0, 0, false
+	}
+	if !vm.jsEnsureObjectICLayout(target.Num) {
+		return 0, 0, false
+	}
+	shapeID := vm.jsObjectShape[target.Num]
+	if shapeID == 0 {
+		return 0, 0, false
+	}
+	slot, ok := vm.jsObjectSlotIndex[target.Num][member]
+	if !ok {
+		return 0, 0, false
+	}
+	desc, hasDesc := vm.jsGetDescriptor(target.Num, member)
+	if hasDesc {
+		if desc.HasGetter || desc.HasSetter || !desc.HasValue {
+			return 0, 0, false
+		}
+	}
+	return shapeID, slot, true
+}
+
+func (vm *VM) jsICMemberGet(target Value, member string, shapeID uint32, slot uint16, flags uint16) (Value, bool) {
+	if flags == 0 || shapeID == 0 {
+		return Value{Type: VTJSUndefined}, false
+	}
+	if target.Type != VTJSObject && target.Type != VTJSFunction {
+		return Value{Type: VTJSUndefined}, false
+	}
+	if vm.jsObjectShape[target.Num] != shapeID {
+		return Value{Type: VTJSUndefined}, false
+	}
+	layout := vm.jsShapeSlots[shapeID]
+	if int(slot) >= len(layout) || layout[slot] != member {
+		return Value{Type: VTJSUndefined}, false
+	}
+	slots := vm.jsObjectSlots[target.Num]
+	if int(slot) >= len(slots) {
+		return Value{Type: VTJSUndefined}, false
+	}
+	return slots[slot], true
+}
+
+func (vm *VM) jsICMemberSet(target Value, member string, val Value, shapeID uint32, slot uint16, flags uint16) bool {
+	if flags == 0 || shapeID == 0 {
+		return false
+	}
+	if target.Type != VTJSObject && target.Type != VTJSFunction {
+		return false
+	}
+	if vm.jsObjectShape[target.Num] != shapeID {
+		return false
+	}
+	layout := vm.jsShapeSlots[shapeID]
+	if int(slot) >= len(layout) || layout[slot] != member {
+		return false
+	}
+	desc, hasDesc := vm.jsGetDescriptor(target.Num, member)
+	if hasDesc {
+		if desc.HasSetter || !desc.Writable || !desc.HasValue {
+			return false
+		}
+	}
+	obj := vm.jsObjectItems[target.Num]
+	if obj == nil {
+		return false
+	}
+	obj[member] = val
+	slots := vm.jsObjectSlots[target.Num]
+	if int(slot) >= len(slots) {
+		return false
+	}
+	slots[slot] = val
+	vm.jsObjectSlots[target.Num] = slots
+	if hasDesc {
+		desc.Value = val
+		desc.HasValue = true
+		vm.jsPropertyItems[target.Num][member] = desc
+	}
+	return true
+}
+
+func (vm *VM) jsICPopulate(cachePos int, target Value, member string) {
+	shapeID, slot, ok := vm.jsResolveICSlot(target, member)
+	if !ok || cachePos+8 > len(vm.bytecode) {
+		return
+	}
+	binary.BigEndian.PutUint32(vm.bytecode[cachePos:], shapeID)
+	binary.BigEndian.PutUint16(vm.bytecode[cachePos+4:], slot)
+	binary.BigEndian.PutUint16(vm.bytecode[cachePos+6:], 1)
 }
 
 // jsClassInherit wires a derived class to its superclass and returns the subclass.
@@ -454,6 +608,7 @@ func (vm *VM) jsSetDescriptor(objID int64, key string, desc jsPropertyDescriptor
 		}
 		obj[key] = desc.Value
 	}
+	vm.jsInvalidateObjectIC(objID)
 }
 
 func (vm *VM) jsCreatePrototypeObject(owner Value) Value {
@@ -5722,6 +5877,21 @@ func (vm *VM) jsUnsignedRightShift(a Value, b Value) Value {
 
 // jsLess implements JScript '<' operator.
 func (vm *VM) jsLess(a Value, b Value) Value {
+	// Fast path: both integers — avoid jsToNumber call and int→float conversion.
+	if a.Type == VTInteger && b.Type == VTInteger {
+		return NewBool(a.Num < b.Num)
+	}
+	// Fast path: both doubles.
+	if a.Type == VTDouble && b.Type == VTDouble {
+		return NewBool(a.Flt < b.Flt)
+	}
+	// Fast path: integer vs double mixed.
+	if a.Type == VTInteger && b.Type == VTDouble {
+		return NewBool(float64(a.Num) < b.Flt)
+	}
+	if a.Type == VTDouble && b.Type == VTInteger {
+		return NewBool(a.Flt < float64(b.Num))
+	}
 	aNum := vm.jsToNumber(a).Flt
 	bNum := vm.jsToNumber(b).Flt
 	return NewBool(aNum < bNum)
@@ -5729,6 +5899,21 @@ func (vm *VM) jsLess(a Value, b Value) Value {
 
 // jsGreater implements JScript '>' operator.
 func (vm *VM) jsGreater(a Value, b Value) Value {
+	// Fast path: both integers.
+	if a.Type == VTInteger && b.Type == VTInteger {
+		return NewBool(a.Num > b.Num)
+	}
+	// Fast path: both doubles.
+	if a.Type == VTDouble && b.Type == VTDouble {
+		return NewBool(a.Flt > b.Flt)
+	}
+	// Fast path: integer vs double mixed.
+	if a.Type == VTInteger && b.Type == VTDouble {
+		return NewBool(float64(a.Num) > b.Flt)
+	}
+	if a.Type == VTDouble && b.Type == VTInteger {
+		return NewBool(a.Flt > float64(b.Num))
+	}
 	aNum := vm.jsToNumber(a).Flt
 	bNum := vm.jsToNumber(b).Flt
 	return NewBool(aNum > bNum)
@@ -5736,6 +5921,21 @@ func (vm *VM) jsGreater(a Value, b Value) Value {
 
 // jsLessEqual implements JScript '<=' operator.
 func (vm *VM) jsLessEqual(a Value, b Value) Value {
+	// Fast path: both integers.
+	if a.Type == VTInteger && b.Type == VTInteger {
+		return NewBool(a.Num <= b.Num)
+	}
+	// Fast path: both doubles.
+	if a.Type == VTDouble && b.Type == VTDouble {
+		return NewBool(a.Flt <= b.Flt)
+	}
+	// Fast path: integer vs double mixed.
+	if a.Type == VTInteger && b.Type == VTDouble {
+		return NewBool(float64(a.Num) <= b.Flt)
+	}
+	if a.Type == VTDouble && b.Type == VTInteger {
+		return NewBool(a.Flt <= float64(b.Num))
+	}
 	aNum := vm.jsToNumber(a).Flt
 	bNum := vm.jsToNumber(b).Flt
 	return NewBool(aNum <= bNum)
@@ -5743,6 +5943,21 @@ func (vm *VM) jsLessEqual(a Value, b Value) Value {
 
 // jsGreaterEqual implements JScript '>=' operator.
 func (vm *VM) jsGreaterEqual(a Value, b Value) Value {
+	// Fast path: both integers.
+	if a.Type == VTInteger && b.Type == VTInteger {
+		return NewBool(a.Num >= b.Num)
+	}
+	// Fast path: both doubles.
+	if a.Type == VTDouble && b.Type == VTDouble {
+		return NewBool(a.Flt >= b.Flt)
+	}
+	// Fast path: integer vs double mixed.
+	if a.Type == VTInteger && b.Type == VTDouble {
+		return NewBool(float64(a.Num) >= b.Flt)
+	}
+	if a.Type == VTDouble && b.Type == VTInteger {
+		return NewBool(a.Flt >= float64(b.Num))
+	}
 	aNum := vm.jsToNumber(a).Flt
 	bNum := vm.jsToNumber(b).Flt
 	return NewBool(aNum >= bNum)

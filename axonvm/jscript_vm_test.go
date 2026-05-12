@@ -22,6 +22,7 @@ package axonvm
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"os"
 	"path/filepath"
@@ -220,7 +221,9 @@ func TestJScriptForLoopBytecodeContainsUpdateOpcodes(t *testing.T) {
 	hasAddAssign := false
 	for i := 0; i < len(bytecode); i++ {
 		switch OpCode(bytecode[i]) {
-		case OpJSIncLocalInt:
+		// OpJSForFastInt is the fused single-opcode fast path for var/let integer loops;
+		// it subsumes the separate increment opcode (OpJSIncLocalInt).
+		case OpJSIncLocalInt, OpJSForFastInt:
 			hasFastInc = true
 		case OpJSAddAssign:
 			hasAddAssign = true
@@ -228,10 +231,107 @@ func TestJScriptForLoopBytecodeContainsUpdateOpcodes(t *testing.T) {
 	}
 
 	if !hasFastInc {
-		t.Fatalf("expected OpJSIncLocalInt in bytecode, got %v", bytecode)
+		t.Fatalf("expected OpJSIncLocalInt or OpJSForFastInt in bytecode, got %v", bytecode)
 	}
 	if !hasAddAssign {
 		t.Fatalf("expected OpJSAddAssign in bytecode, got %v", bytecode)
+	}
+}
+
+func TestJScriptMemberOpcodesReserveInlineCachePayload(t *testing.T) {
+	source := `<script runat="server" language="JScript">` +
+		`var o = { a: 1 };` +
+		`Response.Write(o.a);` +
+		`o.a = 2;` +
+		`Response.Write("|" + o.a);` +
+		`</script>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	bytecode := compiler.Bytecode()
+	hasGet := false
+	hasSet := false
+	for ip := 0; ip < len(bytecode); {
+		op := OpCode(bytecode[ip])
+		sz := opcodeOperandSize(op)
+		if ip+1+sz > len(bytecode) {
+			t.Fatalf("invalid bytecode boundary at ip=%d op=%v", ip, op)
+		}
+		if op == OpJSMemberGet || op == OpJSMemberSet {
+			if sz != 10 {
+				t.Fatalf("expected 10-byte operand payload for %v, got %d", op, sz)
+			}
+			cache := bytecode[ip+3 : ip+11]
+			for i := 0; i < len(cache); i++ {
+				if cache[i] != 0 {
+					t.Fatalf("expected zeroed IC payload before execution, got %v", cache)
+				}
+			}
+			if op == OpJSMemberGet {
+				hasGet = true
+			} else {
+				hasSet = true
+			}
+		}
+		ip += 1 + sz
+	}
+
+	if !hasGet || !hasSet {
+		t.Fatalf("expected both OpJSMemberGet and OpJSMemberSet in bytecode")
+	}
+}
+
+func TestJScriptMemberInlineCachePopulatesAfterRun(t *testing.T) {
+	source := `<script runat="server" language="JScript">` +
+		`var o = { a: 1 };` +
+		`Response.Write(o.a);` +
+		`o.a = 3;` +
+		`Response.Write("|" + o.a);` +
+		`</script>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	host.Response().SetBuffer(false)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	if output.String() != "1|3" {
+		t.Fatalf("unexpected output: %q", output.String())
+	}
+
+	foundPopulated := false
+	for ip := 0; ip < len(vm.bytecode); {
+		op := OpCode(vm.bytecode[ip])
+		sz := opcodeOperandSize(op)
+		if ip+1+sz > len(vm.bytecode) {
+			break
+		}
+		if op == OpJSMemberGet || op == OpJSMemberSet {
+			cachePos := ip + 3
+			shapeID := binary.BigEndian.Uint32(vm.bytecode[cachePos:])
+			flags := binary.BigEndian.Uint16(vm.bytecode[cachePos+6:])
+			if shapeID != 0 && flags != 0 {
+				foundPopulated = true
+				break
+			}
+		}
+		ip += 1 + sz
+	}
+
+	if !foundPopulated {
+		t.Fatalf("expected at least one populated JS member inline cache entry after execution")
 	}
 }
 
@@ -276,7 +376,8 @@ func TestJScriptForLoopFastUpdateAvoidsStackPop(t *testing.T) {
 	hasPop := false
 	for i := 0; i < len(bytecode); i++ {
 		switch OpCode(bytecode[i]) {
-		case OpJSIncLocalInt:
+		// OpJSForFastInt is the fused fast path that replaces OpJSIncLocalInt.
+		case OpJSIncLocalInt, OpJSForFastInt:
 			hasFastInc = true
 		case OpJSPop:
 			hasPop = true
@@ -284,7 +385,7 @@ func TestJScriptForLoopFastUpdateAvoidsStackPop(t *testing.T) {
 	}
 
 	if !hasFastInc {
-		t.Fatalf("expected OpJSIncLocalInt in bytecode, got %v", bytecode)
+		t.Fatalf("expected OpJSIncLocalInt or OpJSForFastInt in bytecode, got %v", bytecode)
 	}
 	if hasPop {
 		t.Fatalf("expected no OpJSPop for fast for-update path, got %v", bytecode)
