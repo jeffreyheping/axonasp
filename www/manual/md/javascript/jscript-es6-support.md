@@ -1293,6 +1293,7 @@ class MyClass [extends BaseClass] {
 - **Inheritance:** When a class uses `extends`, AxonASP evaluates the superclass, validates that it is a constructor or `null`, and wires both the constructor chain and the prototype chain.
 - **Null Heritage:** `extends null` is supported. In that case, the class prototype chain terminates at `null`.
 - **Accessors:** `get` and `set` syntax is supported for defining property getters and setters.
+- **Private Fields:** ES2022 private class fields (e.g. `#propertyName`) and private static fields (e.g. `static #staticProperty`) are fully supported. They provide true encapsulation without external memory overhead.
 
 ### Code Example
 

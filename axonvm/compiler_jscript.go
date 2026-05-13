@@ -1825,6 +1825,9 @@ func (c *Compiler) compileJScriptExpression(expr jsast.Expression) {
 		}
 	case *jsast.AssignExpression:
 		c.compileJScriptAssignment(node)
+	case *jsast.PrivateDotExpression:
+		c.compileJScriptExpression(node.Left)
+		c.emitJSMemberGet(c.addConstant(NewString("\x00__priv_" + node.Identifier.Name.String())))
 	case *jsast.DotExpression:
 		if _, ok := node.Left.(*jsast.SuperExpression); ok {
 			c.emit(OpJSSuperMemberGet, c.addConstant(NewString(node.Identifier.Name.String())))
@@ -2168,6 +2171,11 @@ func (c *Compiler) compileJScriptAssignment(node *jsast.AssignExpression) {
 		c.compileJScriptExpression(node.Right)
 		c.emit(OpJSDup)
 		c.compileJScriptDestructuring(left.(jsast.BindingTarget), false, false, false)
+	case *jsast.PrivateDotExpression:
+		c.compileJScriptExpression(left.Left)
+		c.compileJScriptExpression(node.Right)
+		c.emitJSMemberSet(c.addConstant(NewString("\x00__priv_" + left.Identifier.Name.String())))
+		c.emit(OpJSLoadUndefined)
 	case *jsast.DotExpression:
 		if _, ok := left.Left.(*jsast.SuperExpression); ok {
 			c.compileJScriptExpression(node.Right)
@@ -3533,6 +3541,25 @@ func (c *Compiler) compileJScriptUpdateExpression(node *jsast.UnaryExpression) b
 			}
 			return true
 		}
+	case *jsast.PrivateDotExpression:
+		c.compileJScriptExpression(operand.Left)
+		nameIdx := c.addConstant(NewString("\x00__priv_" + operand.Identifier.Name.String()))
+		switch node.Operator {
+		case jstoken.INCREMENT:
+			if node.Postfix {
+				c.emit(OpJSPostMemberIncrement, nameIdx)
+			} else {
+				c.emit(OpJSPreMemberIncrement, nameIdx)
+			}
+			return true
+		case jstoken.DECREMENT:
+			if node.Postfix {
+				c.emit(OpJSPostMemberDecrement, nameIdx)
+			} else {
+				c.emit(OpJSPreMemberDecrement, nameIdx)
+			}
+			return true
+		}
 	case *jsast.DotExpression:
 		c.compileJScriptExpression(operand.Left)
 		nameIdx := c.addConstant(NewString(operand.Identifier.Name.String()))
@@ -4121,6 +4148,8 @@ func (c *Compiler) compileJScriptClassLiteral(node *jsast.ClassLiteral) {
 			name := ""
 			if id, ok := field.Key.(*jsast.Identifier); ok {
 				name = id.Name.String()
+			} else if id, ok := field.Key.(*jsast.PrivateIdentifier); ok {
+				name = "\x00__priv_" + id.Name.String()
 			} else if lit, ok := field.Key.(*jsast.StringLiteral); ok {
 				name = lit.Value.String()
 			}
@@ -4143,6 +4172,8 @@ func (c *Compiler) compileJScriptClassFields() {
 			name := ""
 			if id, ok := field.Key.(*jsast.Identifier); ok {
 				name = id.Name.String()
+			} else if id, ok := field.Key.(*jsast.PrivateIdentifier); ok {
+				name = "\x00__priv_" + id.Name.String()
 			} else if lit, ok := field.Key.(*jsast.StringLiteral); ok {
 				name = lit.Value.String()
 			}

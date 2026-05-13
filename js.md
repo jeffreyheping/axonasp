@@ -21,7 +21,8 @@ This document serves as a high-precision checklist for implementing ECMAScript 6
 
 ---
 
-Here is the comprehensive, phased prompt you can provide to your coding agent. It is strictly organized from the easiest, lowest-risk library additions to the most complex architectural and AST changes. It incorporates checkpoints for testing to ensure the VM does not break.
+Here is the comprehensive, phased prompt you can provide to your coding agent. It is strictly organized from the easiest, lo
+st-risk library additions to the most complex architectural and AST changes. It incorporates checkpoints for testing to ensure the VM does not break.
 
 ---
 
