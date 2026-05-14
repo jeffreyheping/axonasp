@@ -607,6 +607,47 @@ func TestJScriptStringRepeat(t *testing.T) {
 	}
 }
 
+func TestJScriptStringCodePointAt(t *testing.T) {
+	out, err := runJScript2(t, jscriptSrc(`
+		var s = "A😀B";
+		Response.Write(s.codePointAt(0));
+		Response.Write("|");
+		Response.Write(s.codePointAt(1));
+		Response.Write("|");
+		Response.Write(s.codePointAt(2));
+		Response.Write("|");
+		Response.Write(s.codePointAt(99) === undefined ? "undef" : "bad");
+	`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "65|128512|56832|undef" {
+		t.Errorf("expected '65|128512|56832|undef', got %q", out)
+	}
+}
+
+func TestJScriptStringNormalize(t *testing.T) {
+	out, err := runJScript2(t, jscriptSrc(`
+		var decomposed = "e\u0301";
+		Response.Write(decomposed.normalize("NFC") === "é" ? "yes" : "no");
+		Response.Write("|");
+		Response.Write("é".normalize("NFD") === decomposed ? "yes" : "no");
+		Response.Write("|");
+		try {
+			"x".normalize("BAD");
+			Response.Write("noerr");
+		} catch (e) {
+			Response.Write(("" + e).indexOf("RangeError") >= 0 ? "range" : "other");
+		}
+	`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "yes|yes|range" {
+		t.Errorf("expected 'yes|yes|range', got %q", out)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // ES6 Number Static Methods
 // ---------------------------------------------------------------------------
@@ -725,6 +766,47 @@ func TestJScriptArrayFindAndFindIndex(t *testing.T) {
 	}
 }
 
+func TestJScriptArrayKeysEntriesIterators(t *testing.T) {
+	out, err := runJScript2(t, jscriptSrc(`
+		var arr = [10, 20, 30];
+		var keys = [];
+		for (var k of arr.keys()) {
+			keys.push(k);
+		}
+		var entries = [];
+		for (var e of arr.entries()) {
+			entries.push(e[0] + ":" + e[1]);
+		}
+		Response.Write(keys.join(","));
+		Response.Write("|");
+		Response.Write(entries.join(","));
+	`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "0,1,2|0:10,1:20,2:30" {
+		t.Errorf("expected '0,1,2|0:10,1:20,2:30', got %q", out)
+	}
+}
+
+func TestJScriptArrayCopyWithinPhase2(t *testing.T) {
+	out, err := runJScript2(t, jscriptSrc(`
+		var a = [1, 2, 3, 4, 5];
+		a.copyWithin(0, 3);
+		var b = [1, 2, 3, 4, 5];
+		b.copyWithin(-2, 0, 2);
+		Response.Write(a.join(","));
+		Response.Write("|");
+		Response.Write(b.join(","));
+	`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "4,5,3,4,5|1,2,3,1,2" {
+		t.Errorf("expected '4,5,3,4,5|1,2,3,1,2', got %q", out)
+	}
+}
+
 func TestJScriptBinaryAndOctalLiterals(t *testing.T) {
 	out, err := runJScript2(t, jscriptSrc(`
 		var b = 0b1010;
@@ -754,6 +836,75 @@ func TestJScriptMathTruncSignCbrt(t *testing.T) {
 	}
 	if out != "4|-1|0|3" {
 		t.Errorf("expected '4|-1|0|3', got %q", out)
+	}
+}
+
+func TestJScriptGlobalURIFunctions(t *testing.T) {
+	out, err := runJScript2(t, jscriptSrc(`
+		var full = "https://example.com/a path/?q=hello world&x=1+2#frag";
+		var encoded = encodeURI(full);
+		Response.Write(encoded === "https://example.com/a%20path/?q=hello%20world&x=1+2#frag" ? "ok" : "bad");
+		Response.Write("|");
+		Response.Write(decodeURI(encoded) === full ? "ok" : "bad");
+		Response.Write("|");
+
+		var component = "q=hello world&x=1+2";
+		var encodedComponent = encodeURIComponent(component);
+		Response.Write(encodedComponent === "q%3Dhello%20world%26x%3D1%2B2" ? "ok" : "bad");
+		Response.Write("|");
+		Response.Write(decodeURIComponent(encodedComponent) === component ? "ok" : "bad");
+		Response.Write("|");
+
+		try {
+			decodeURIComponent("%");
+			Response.Write("noerror");
+		} catch (e) {
+			Response.Write(e.name || "error");
+		}
+	`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "ok|ok|ok|ok|TypeError" {
+		t.Errorf("expected 'ok|ok|ok|ok|TypeError', got %q", out)
+	}
+}
+
+func TestJScriptMathPhase1Extensions(t *testing.T) {
+	out, err := runJScript2(t, jscriptSrc(`
+		Response.Write(Math.acosh(1));
+		Response.Write("|");
+		Response.Write(Math.asinh(0));
+		Response.Write("|");
+		Response.Write(Math.atanh(0.5).toFixed(3));
+		Response.Write("|");
+		Response.Write(Math.expm1(1).toFixed(6));
+		Response.Write("|");
+		Response.Write(Math.log1p(1).toFixed(6));
+		Response.Write("|");
+		Response.Write(Math.log10(1000));
+		Response.Write("|");
+		Response.Write(Math.log2(8));
+		Response.Write("|");
+		Response.Write(Math.hypot(3, 4));
+		Response.Write("|");
+		Response.Write(Math.imul(0xffffffff, 5));
+		Response.Write("|");
+		Response.Write(Math.clz32(1));
+		Response.Write("|");
+		Response.Write(Math.clz32(0));
+		Response.Write("|");
+		Response.Write(isNaN(Math.log1p(-2)) ? "nan" : "nonan");
+		Response.Write("|");
+		Response.Write(!isFinite(Math.hypot(Infinity, 3)) ? "inf" : "finite");
+		Response.Write("|");
+		Response.Write(Math.fround(1.337) !== 1.337 ? "diff" : "same");
+	`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "0|0|0.549|1.718282|0.693147|3|3|5|-5|31|32|nan|inf|diff" {
+		t.Errorf("expected '0|0|0.549|1.718282|0.693147|3|3|5|-5|31|32|nan|inf|diff', got %q", out)
 	}
 }
 

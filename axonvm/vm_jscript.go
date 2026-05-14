@@ -28,7 +28,9 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"math/bits"
 	"math/rand"
+	"net/url"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -36,10 +38,13 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"g3pix.com.br/axonasp/jscript/ftoa"
 	jsparser "g3pix.com.br/axonasp/jscript/parser"
 	"g3pix.com.br/axonasp/vbscript"
+	"golang.org/x/text/unicode/norm"
 )
 
 const jsMaxStringBytes = 8 * 1024 * 1024
@@ -55,6 +60,7 @@ const jsGeneratorFlag = "__axon_internal__:generator"
 const jsAsyncFlag = "__axon_internal__:async"
 const jsDerivedConstructorFlag = "__axon_internal__:derived_constructor"
 const jsModuleExportPrefix = "__js_export__:"
+const jsHexUpperDigits = "0123456789ABCDEF"
 
 const (
 	jsPropertyKindMethod = 0
@@ -1609,6 +1615,10 @@ func (vm *VM) ensureJSRootEnv() {
 	bindings["isFinite"] = vm.jsCreateIntrinsicObject("", "isFinite")
 	bindings["parseInt"] = vm.jsCreateIntrinsicObject("", "parseInt")
 	bindings["parseFloat"] = vm.jsCreateIntrinsicObject("", "parseFloat")
+	bindings["decodeURI"] = vm.jsCreateIntrinsicObject("", "decodeURI")
+	bindings["decodeURIComponent"] = vm.jsCreateIntrinsicObject("", "decodeURIComponent")
+	bindings["encodeURI"] = vm.jsCreateIntrinsicObject("", "encodeURI")
+	bindings["encodeURIComponent"] = vm.jsCreateIntrinsicObject("", "encodeURIComponent")
 	if evalIdx, ok := GetBuiltinIndex("Eval"); ok {
 		bindings["eval"] = Value{Type: VTBuiltin, Num: int64(evalIdx)}
 	}
@@ -2986,6 +2996,164 @@ func jsNormalizeRelativeIndex(idx int, length int) int {
 	return idx
 }
 
+func jsParseHexByte(hi byte, lo byte) (byte, bool) {
+	var high byte
+	switch {
+	case hi >= '0' && hi <= '9':
+		high = hi - '0'
+	case hi >= 'a' && hi <= 'f':
+		high = hi - 'a' + 10
+	case hi >= 'A' && hi <= 'F':
+		high = hi - 'A' + 10
+	default:
+		return 0, false
+	}
+
+	var low byte
+	switch {
+	case lo >= '0' && lo <= '9':
+		low = lo - '0'
+	case lo >= 'a' && lo <= 'f':
+		low = lo - 'a' + 10
+	case lo >= 'A' && lo <= 'F':
+		low = lo - 'A' + 10
+	default:
+		return 0, false
+	}
+
+	return (high << 4) | low, true
+}
+
+func jsIsEncodeURIComponentSafeByte(ch byte) bool {
+	if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') {
+		return true
+	}
+	switch ch {
+	case '-', '_', '.', '!', '~', '*', '\'', '(', ')':
+		return true
+	default:
+		return false
+	}
+}
+
+func jsIsEncodeURISafeByte(ch byte) bool {
+	if jsIsEncodeURIComponentSafeByte(ch) {
+		return true
+	}
+	switch ch {
+	case ';', ',', '/', '?', ':', '@', '&', '=', '+', '$', '#':
+		return true
+	default:
+		return false
+	}
+}
+
+func jsIsDecodeURIReservedByte(ch byte) bool {
+	switch ch {
+	case ';', ',', '/', '?', ':', '@', '&', '=', '+', '$', '#':
+		return true
+	default:
+		return false
+	}
+}
+
+func jsEncodeURIValue(input string, component bool) string {
+	if input == "" {
+		return ""
+	}
+
+	var out strings.Builder
+	out.Grow(len(input))
+	for _, r := range input {
+		if r < utf8.RuneSelf {
+			ch := byte(r)
+			if component {
+				if jsIsEncodeURIComponentSafeByte(ch) {
+					out.WriteByte(ch)
+					continue
+				}
+			} else {
+				if jsIsEncodeURISafeByte(ch) {
+					out.WriteByte(ch)
+					continue
+				}
+			}
+		}
+
+		var buf [utf8.UTFMax]byte
+		n := utf8.EncodeRune(buf[:], r)
+		for i := 0; i < n; i++ {
+			b := buf[i]
+			out.WriteByte('%')
+			out.WriteByte(jsHexUpperDigits[b>>4])
+			out.WriteByte(jsHexUpperDigits[b&0x0F])
+		}
+	}
+
+	return out.String()
+}
+
+func jsDecodeURIComponentValue(input string) (string, error) {
+	if input == "" {
+		return "", nil
+	}
+	return url.PathUnescape(input)
+}
+
+func jsDecodeURIValue(input string) (string, error) {
+	if input == "" {
+		return "", nil
+	}
+
+	var out strings.Builder
+	out.Grow(len(input))
+	chunkStart := 0
+	flushChunk := func(end int) error {
+		if end <= chunkStart {
+			return nil
+		}
+		decoded, err := url.PathUnescape(input[chunkStart:end])
+		if err != nil {
+			return err
+		}
+		out.WriteString(decoded)
+		return nil
+	}
+
+	for i := 0; i < len(input); {
+		if input[i] != '%' {
+			i++
+			continue
+		}
+		if i+2 >= len(input) {
+			i++
+			continue
+		}
+		decodedByte, ok := jsParseHexByte(input[i+1], input[i+2])
+		if !ok {
+			i++
+			continue
+		}
+		if jsIsDecodeURIReservedByte(decodedByte) {
+			if err := flushChunk(i); err != nil {
+				return "", err
+			}
+			out.WriteByte('%')
+			out.WriteByte(input[i+1])
+			out.WriteByte(input[i+2])
+			i += 3
+			chunkStart = i
+			continue
+		}
+		i += 3
+	}
+
+	if err := flushChunk(len(input)); err != nil {
+		return "", err
+	}
+	return out.String(), nil
+}
+
 func (vm *VM) jsParseIntES5(args []Value) Value {
 	if len(args) == 0 {
 		return NewDouble(math.NaN())
@@ -3947,6 +4115,24 @@ func (vm *VM) jsCallMember(target Value, member string, args []Value) (Value, bo
 				return NewDouble(math.NaN()), true
 			}
 			return NewInteger(int64(runes[idx])), true
+		case strings.EqualFold(member, "codePointAt"):
+			idx := int(vm.jsToNumber(jsArgOrUndefined(args, 0)).Flt)
+			if idx < 0 {
+				return Value{Type: VTJSUndefined}, true
+			}
+			units := utf16.Encode(runes)
+			if idx >= len(units) {
+				return Value{Type: VTJSUndefined}, true
+			}
+			first := units[idx]
+			if first >= 0xD800 && first <= 0xDBFF && idx+1 < len(units) {
+				second := units[idx+1]
+				if second >= 0xDC00 && second <= 0xDFFF {
+					r := utf16.DecodeRune(rune(first), rune(second))
+					return NewInteger(int64(r)), true
+				}
+			}
+			return NewInteger(int64(first)), true
 		case strings.EqualFold(member, "substring"):
 			start := jsClampIndex(int(vm.jsToNumber(jsArgOrUndefined(args, 0)).Flt), len(runes))
 			end := len(runes)
@@ -4149,6 +4335,29 @@ func (vm *VM) jsCallMember(target Value, member string, args []Value) (Value, bo
 				return Value{Type: VTJSUndefined}, true
 			}
 			return NewString(trimmed), true
+		case strings.EqualFold(member, "normalize"):
+			form := "NFC"
+			if len(args) > 0 && args[0].Type != VTJSUndefined {
+				form = vm.valueToString(args[0])
+			}
+			var normalized string
+			switch form {
+			case "NFC":
+				normalized = norm.NFC.String(text)
+			case "NFD":
+				normalized = norm.NFD.String(text)
+			case "NFKC":
+				normalized = norm.NFKC.String(text)
+			case "NFKD":
+				normalized = norm.NFKD.String(text)
+			default:
+				vm.jsThrowRangeError("The normalization form should be one of NFC, NFD, NFKC, NFKD")
+				return Value{Type: VTJSUndefined}, true
+			}
+			if !vm.jsEnsureStringSize(len(normalized)) || !vm.jsChargeStringWork(len(normalized)) {
+				return Value{Type: VTJSUndefined}, true
+			}
+			return NewString(normalized), true
 		// ES6 String.prototype additions
 		case strings.EqualFold(member, "includes"):
 			if len(args) == 0 {
@@ -4265,6 +4474,12 @@ func (vm *VM) jsCallMember(target Value, member string, args []Value) (Value, bo
 			return Value{Type: VTJSUndefined}, true
 		}
 		switch {
+		case strings.EqualFold(member, "keys"):
+			return vm.jsCreateArrayIterator(target, 1), true
+		case strings.EqualFold(member, "entries"):
+			return vm.jsCreateArrayIterator(target, 2), true
+		case strings.EqualFold(member, "values"):
+			return vm.jsCreateArrayIterator(target, 0), true
 		case strings.EqualFold(member, "fill"):
 			fillValue := jsArgOrUndefined(args, 0)
 			length := len(target.Arr.Values)
@@ -5316,6 +5531,12 @@ func (vm *VM) jsCallMember(target Value, member string, args []Value) (Value, bo
 				return NewDouble(math.Acos(vm.jsToNumber(jsArgOrUndefined(args, 0)).Flt)), true
 			case strings.EqualFold(member, "atan"):
 				return NewDouble(math.Atan(vm.jsToNumber(jsArgOrUndefined(args, 0)).Flt)), true
+			case strings.EqualFold(member, "acosh"):
+				return NewDouble(math.Acosh(vm.jsToNumber(jsArgOrUndefined(args, 0)).Flt)), true
+			case strings.EqualFold(member, "asinh"):
+				return NewDouble(math.Asinh(vm.jsToNumber(jsArgOrUndefined(args, 0)).Flt)), true
+			case strings.EqualFold(member, "atanh"):
+				return NewDouble(math.Atanh(vm.jsToNumber(jsArgOrUndefined(args, 0)).Flt)), true
 			case strings.EqualFold(member, "atan2"):
 				y := vm.jsToNumber(jsArgOrUndefined(args, 0)).Flt
 				x := vm.jsToNumber(jsArgOrUndefined(args, 1)).Flt
@@ -5340,10 +5561,37 @@ func (vm *VM) jsCallMember(target Value, member string, args []Value) (Value, bo
 				return NewInteger(0), true
 			case strings.EqualFold(member, "cbrt"):
 				return NewDouble(math.Cbrt(vm.jsToNumber(jsArgOrUndefined(args, 0)).Flt)), true
+			case strings.EqualFold(member, "expm1"):
+				return NewDouble(math.Expm1(vm.jsToNumber(jsArgOrUndefined(args, 0)).Flt)), true
+			case strings.EqualFold(member, "log1p"):
+				return NewDouble(math.Log1p(vm.jsToNumber(jsArgOrUndefined(args, 0)).Flt)), true
+			case strings.EqualFold(member, "log10"):
+				return NewDouble(math.Log10(vm.jsToNumber(jsArgOrUndefined(args, 0)).Flt)), true
+			case strings.EqualFold(member, "log2"):
+				return NewDouble(math.Log2(vm.jsToNumber(jsArgOrUndefined(args, 0)).Flt)), true
 			case strings.EqualFold(member, "round"):
 				return NewDouble(math.Round(vm.jsToNumber(jsArgOrUndefined(args, 0)).Flt)), true
 			case strings.EqualFold(member, "sqrt"):
 				return NewDouble(math.Sqrt(vm.jsToNumber(jsArgOrUndefined(args, 0)).Flt)), true
+			case strings.EqualFold(member, "fround"):
+				return NewDouble(float64(float32(vm.jsToNumber(jsArgOrUndefined(args, 0)).Flt))), true
+			case strings.EqualFold(member, "clz32"):
+				value := vm.jsToUint32Exact(jsArgOrUndefined(args, 0))
+				return NewInteger(int64(bits.LeadingZeros32(value))), true
+			case strings.EqualFold(member, "imul"):
+				a := vm.jsToUint32Exact(jsArgOrUndefined(args, 0))
+				b := vm.jsToUint32Exact(jsArgOrUndefined(args, 1))
+				return NewInteger(int64(int32(a * b))), true
+			case strings.EqualFold(member, "hypot"):
+				if len(args) == 0 {
+					return NewInteger(0), true
+				}
+				hyp := 0.0
+				for i := 0; i < len(args); i++ {
+					n := vm.jsToNumber(args[i]).Flt
+					hyp = math.Hypot(hyp, n)
+				}
+				return NewDouble(hyp), true
 			case strings.EqualFold(member, "pow"):
 				base := vm.jsToNumber(jsArgOrUndefined(args, 0)).Flt
 				exp := vm.jsToNumber(jsArgOrUndefined(args, 1)).Flt
@@ -6584,6 +6832,21 @@ func (vm *VM) jsEnumerateForOfValues(source Value) []Value {
 				}
 				return out
 			}
+		case "Array Iterator", "String Iterator":
+			out := make([]Value, 0)
+			for {
+				result, handled := vm.jsCallMember(source, "next", nil)
+				if !handled || result.Type != VTJSObject {
+					break
+				}
+				doneVal, _ := vm.jsMemberGet(result, "done")
+				if vm.jsTruthy(doneVal) {
+					break
+				}
+				val, _ := vm.jsMemberGet(result, "value")
+				out = append(out, val)
+			}
+			return out
 		default:
 			// Typed arrays are iterable
 			if jsIsTypedArrayType(class) {
@@ -6696,6 +6959,10 @@ func (vm *VM) jsCall(callee Value, thisVal Value, args []Value) Value {
 		switch ctorName {
 		case "ArrayValues":
 			return vm.jsCreateArrayIterator(thisVal, 0)
+		case "ArrayKeys":
+			return vm.jsCreateArrayIterator(thisVal, 1)
+		case "ArrayEntries":
+			return vm.jsCreateArrayIterator(thisVal, 2)
 		case "StringIteratorFactory":
 			return vm.jsCreateStringIterator(vm.valueToString(thisVal))
 		case "PromiseResolve":
@@ -6812,6 +7079,24 @@ func (vm *VM) jsCall(callee Value, thisVal Value, args []Value) Value {
 			return vm.jsParseIntES5(args)
 		case "parseFloat":
 			return vm.jsParseFloatES5(args)
+		case "decodeURI":
+			decoded, err := jsDecodeURIValue(vm.valueToString(jsArgOrUndefined(args, 0)))
+			if err != nil {
+				vm.jsThrowTypeError("URI malformed")
+				return Value{Type: VTJSUndefined}
+			}
+			return NewString(decoded)
+		case "decodeURIComponent":
+			decoded, err := jsDecodeURIComponentValue(vm.valueToString(jsArgOrUndefined(args, 0)))
+			if err != nil {
+				vm.jsThrowTypeError("URI malformed")
+				return Value{Type: VTJSUndefined}
+			}
+			return NewString(decoded)
+		case "encodeURI":
+			return NewString(jsEncodeURIValue(vm.valueToString(jsArgOrUndefined(args, 0)), false))
+		case "encodeURIComponent":
+			return NewString(jsEncodeURIValue(vm.valueToString(jsArgOrUndefined(args, 0)), true))
 		}
 		return Value{Type: VTJSUndefined}
 	case VTBuiltin:
@@ -6923,6 +7208,20 @@ func (vm *VM) jsToInt32(v Value) int32 {
 func (vm *VM) jsToUint32(v Value) uint32 {
 	num := vm.jsToNumber(v).Flt
 	return uint32(int32(num))
+}
+
+// jsToUint32Exact converts a value to uint32 using ECMAScript ToUint32 semantics.
+func (vm *VM) jsToUint32Exact(v Value) uint32 {
+	num := vm.jsToNumber(v).Flt
+	if math.IsNaN(num) || math.IsInf(num, 0) || num == 0 {
+		return 0
+	}
+	truncated := math.Trunc(num)
+	mod := math.Mod(truncated, 4294967296.0)
+	if mod < 0 {
+		mod += 4294967296.0
+	}
+	return uint32(mod)
 }
 
 // jsAdd implements JScript '+' operator (string concatenation or numeric addition).

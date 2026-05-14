@@ -350,6 +350,7 @@ func startTUI() {
 		AddItem(statusWidget, 3, 1, false)
 
 	clearOutput := func() {
+		inputArea.SetText("", false)
 		outputArea.Clear()
 	}
 

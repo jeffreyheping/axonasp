@@ -101,6 +101,10 @@ func (vm *VM) jsPopulatePrototypes(bindings map[string]Value) {
 	if arrayCtor, ok := bindings["Array"]; ok {
 		if proto, deferred := vm.jsMemberGet(arrayCtor, "prototype"); !deferred && proto.Type == VTJSObject {
 			valuesFn := vm.jsCreateNativeFunction("values", "ArrayValues")
+			keysFn := vm.jsCreateNativeFunction("keys", "ArrayKeys")
+			entriesFn := vm.jsCreateNativeFunction("entries", "ArrayEntries")
+			vm.jsSetDescriptor(proto.Num, "keys", jsDefaultPropertyDescriptor(keysFn))
+			vm.jsSetDescriptor(proto.Num, "entries", jsDefaultPropertyDescriptor(entriesFn))
 			vm.jsSetDescriptor(proto.Num, "values", jsDefaultPropertyDescriptor(valuesFn))
 
 			itKey := jsSymbolPropertyPrefix + strconv.FormatInt(jsWellKnownSymbolIterator, 10)
@@ -235,10 +239,8 @@ func (vm *VM) jsArrayIteratorNext(itObj Value) Value {
 	case 1: // keys
 		val = NewInteger(int64(it.index))
 	case 2: // entries
-		entryVal := vm.allocJSID()
 		entryArr := NewVBArrayFromValues(0, []Value{NewInteger(int64(it.index)), vm.jsArrayIteratorGetVal(it.target, values, it.index)})
-		vm.jsObjectItems[entryVal] = map[string]Value{"__js_vbarray_source": ValueFromVBArray(entryArr)}
-		val = Value{Type: VTJSObject, Num: entryVal}
+		val = ValueFromVBArray(entryArr)
 	default: // values
 		val = vm.jsArrayIteratorGetVal(it.target, values, it.index)
 	}
@@ -283,6 +285,12 @@ func (vm *VM) jsGetIterator(source Value) Value {
 	}
 	if source.Type == VTString {
 		return vm.jsCreateStringIterator(source.Str)
+	}
+	if source.Type == VTJSObject {
+		class := vm.jsObjectStringProperty(source, "__js_type")
+		if class == "Array Iterator" || class == "String Iterator" {
+			return source
+		}
 	}
 
 	itKey := jsSymbolPropertyPrefix + strconv.FormatInt(jsWellKnownSymbolIterator, 10)

@@ -25,7 +25,56 @@ Here is the comprehensive, phased prompt you can provide to your coding agent. I
 st-risk library additions to the most complex architectural and AST changes. It incorporates checkpoints for testing to ensure the VM does not break.
 
 
---
+---
+
+Here is the structured prompt and roadmap, strictly in English, organized from the simplest legacy implementations to the highly complex metaprogramming and internationalization APIs. It follows the exact requested format.
+
+```markdown
+# 🚀 AXONASP: JSCRIPT ES6+ GAP FILLING & MODERNIZATION ROADMAP
+
+This document outlines the phased implementation plan for missing ES6+ features, starting from foundational legacy functions and progressing towards advanced metaprogramming APIs. 
+
+## 🎯 CORE DIRECTIVES
+1. **Strict Isolation:** Modify ONLY JScript-related files (`vm_jscript.go`, `compiler_jscript.go`, etc.).
+2. **Performance Axioms:** Prioritize Zero-Allocation. Map string/math operations to native Go standard libraries wherever possible.
+3. **Validation:** Every phase requires Go unit tests and `.asp` test pages to guarantee zero regressions.
+
+---
+
+
+## 🛠️ PHASE 3: OBJECT STATICS (MODERATE-HIGH COMPLEXITY)
+
+**Goal:** Complete the `Object` constructor static methods.
+
+### Tasks:
+
+    * SUBPHASE 3.1: Object Static Methods
+        * [ ] **Object.is:** Implement `Object.is(value1, value2)`. It must behave exactly like `===` except it correctly evaluates `Object.is(NaN, NaN)` as `true` and differentiates `+0` and `-0`.
+        * [ ] **Object.setPrototypeOf:** Implement `Object.setPrototypeOf(obj, prototype)`. Hook into the internal VM state (e.g., `vm.jsSetProto`) to re-wire the object's `__proto__` reference dynamically. Throw `TypeError` if `obj` is not extensible or `prototype` is invalid.
+        * [ ] **Object.getOwnPropertySymbols:** Implement `Object.getOwnPropertySymbols(obj)`. Scan the object's internal property map for keys that are specifically typed as Symbols (if your engine uses a special prefix or type flag for Symbols).
+        * [ ] **Validation:** Create `test_object_statics.asp`. Validate `NaN` equality, prototype chaining alterations, and symbol extraction.
+
+
+---
+
+## 🛠️ PHASE 4: INTERNATIONALIZATION API (HIGH COMPLEXITY)
+
+**Goal:** Implement the `Intl` API. This is heavy; prioritize integration with Go's `golang.org/x/text` packages.
+
+### Tasks:
+The Intl API - We must use the same system we use with the VBScript for internationalization/localization. We have already implemented the necessary Go functions in VBScript to handle locale-aware formatting and parsing - check the locale_format.go file/mslcid.go/builtins_vbscript_compat.go. Now we need to expose these capabilities to the JScript environment through the `Intl` namespace.
+    * SUBPHASE 5.1: The Intl Namespace
+        * [ ] **Setup:** Register the `Intl` global object in `ensureJSRootEnv`. If a locale is not set, default to locale and language set in axonasp.toml or fallback to `"en-US"` like in VBScript implementation (locale_format.go).
+    * SUBPHASE 5.2: Intl.DateTimeFormat
+        * [ ] **Constructor:** Implement `Intl.DateTimeFormat([locales[, options]])`. Map JS locales to Go `language.Tag`.
+        * [ ] **Format:** Implement the `format()` method, converting the JS Date object to Go's `time.Time` and formatting it according to the requested locale conventions using the AxonASP localization libraries.
+    * SUBPHASE 5.3: Intl.NumberFormat
+        * [ ] **Constructor:** Implement `Intl.NumberFormat([locales[, options]])`.
+        * [ ] **Format:** Implement `format()`. Support `style: 'decimal'`, `style: 'currency'`, and `style: 'percent'`, applying correct locale-specific grouping separators and currency symbols using `locale_format.go`, `golang.org/x/text/message`, `github.com/goodsign/monday` and `golang.org/x/text/language` and `currency`.
+        * [ ] **Validation:** Create `test_intl.asp`. Format large numbers, currencies, and dates in `"en-US"`, `"pt-BR"`, and `"de-DE"`.
+```
+
+---
 
 ### Phase 5: Hard Constraints & Major Libraries (Extreme Complexity)
 
@@ -35,10 +84,15 @@ These are massive undertakings. Do not start these unless Phase 1-4 are 100% sta
 
 * **Target:** Named Capture Groups, Lookbehind, Lookahead.
 * **Implementation Tips:** Go's native `regexp` package guarantees linear time (O(n)) to prevent ReDoS attacks, which means it explicitly omits Lookaround and Backreferences. To support full JS RegExp, we would need to integrate a PCRE-compatible engine (like `regexp2`). Note: This breaks our strict "no external engines" rule, so advise the user before proceeding.
+    * RegExp Sticky Flag & Properties
+        * [ ] **RegExp.prototype.flags:** Implement the getter for `flags`. It must return a string of active flags (`g`, `i`, `m`, `u`, `y`) in alphabetical order.
+        * [ ] **Sticky Flag (y) Logic:** Modify the `RegExp` execution logic inside `vm_jscript.go`. If the `y` flag is present, ensure the matching engine explicitly anchors the search to start *exactly* at the `lastIndex` property of the RegExp object. Update `lastIndex` upon match or reset it to `0` on failure.
+        * [ ] **Validation:** Create `test_regexp_sticky.asp`. Create a sticky regex and advance `lastIndex` manually to ensure matches only occur exactly at that index.
+
 
 ---
 
-## 🛠️ PHASE 7: PROXIES & REFLECTION (HIGH COMPLEXITY)
+## 🛠️ PHASE 6: PROXIES & REFLECTION (HIGH COMPLEXITY)
 
 **Goal:** Introduce metaprogramming capabilities.
 
@@ -63,6 +117,7 @@ Follow the subphase breakdown below for a structured implementation of Proxies a
         * [ ] **Has Trap:** Hook into the `in` operator logic (e.g., `OpJSIn`). Route to the `"has"` trap if defined.
         * [ ] **Delete Trap:** Hook into the `delete` operator logic. Route to the `"deleteProperty"` trap. Enforce strict mode throwing if the trap returns `false`.
         * [ ] **Keys/Enumeration:** Hook into `OpForIn` and `Object.keys()` internal logic to support the `"ownKeys"` trap, ensuring it returns a valid Array or iterable of strings/symbols.
+        * [ ] **Object Traps:** Hook into `in` (`has`), `delete` (`deleteProperty`), and `Object.keys()` (`ownKeys`).
         * [ ] **Validation:** Create `test_proxy_operations.asp` to verify operator interception works flawlessly.
     * SUBPHASE 7.5: The `Reflect` API Implementation
         * [ ] **Reflect Methods:** Implement `Reflect.get()`, `Reflect.set()`, `Reflect.apply()`, `Reflect.construct()`, `Reflect.has()`, `Reflect.deleteProperty()`, and `Reflect.ownKeys()`.

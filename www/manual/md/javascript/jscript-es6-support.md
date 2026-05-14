@@ -620,6 +620,14 @@ Fills all elements from `start` to `end` (exclusive) with `value`, in place. Neg
 
 Copies a portion of the array (from `start` to `end`, exclusive) to another position (`target`) within the same array, in place. Does not change the array length. Returns the modified array.
 
+### `Array.prototype.keys()`
+
+Returns an Array Iterator object containing each numeric index key from the array.
+
+### `Array.prototype.entries()`
+
+Returns an Array Iterator object containing `[index, value]` pairs for each array element.
+
 ### `Array.prototype.at(index)`
 
 Returns the element at the specified `index`. Supports relative indexing from the end if `index` is negative.
@@ -647,6 +655,7 @@ Returns a **new** array with some elements removed and/or replaced at a given in
 ### Remarks
 
 - Methods like `fill` and `copyWithin` operate in place and return the same array reference.
+- `keys()` and `entries()` return standard iterable Array Iterator objects and can be consumed by `for...of`.
 - Modern immutable methods (`toSorted`, `toReversed`, `toSpliced`) always return a new array instance.
 - Negative index arguments in `at`, `fill`, and `copyWithin` are normalized relative to the array length.
 
@@ -664,6 +673,16 @@ Response.Write(sorted.join(","));
 // Output: 1,2,3
 Response.Write(original.join(","));
 // Output: 3,1,2 (unchanged)
+
+for (var k of [10, 20].keys()) {
+    Response.Write(k + " ");
+}
+// Output: 0 1
+
+for (var e of [10, 20].entries()) {
+    Response.Write(e[0] + ":" + e[1] + " ");
+}
+// Output: 0:10 1:20
 
 Response.Write("abc".at(-1));
 // Output: c
@@ -696,6 +715,14 @@ Returns a new string containing `count` repetitions of the original string. Retu
 
 Returns the character at the specified `index`. Supports relative indexing from the end if `index` is negative.
 
+### `String.prototype.codePointAt(position)`
+
+Returns the Unicode code point value at `position`. If `position` is out of range, returns `undefined`.
+
+### `String.prototype.normalize([form])`
+
+Returns the Unicode Normalization Form of the string. Supported values are `NFC`, `NFD`, `NFKC`, and `NFKD`. If omitted, `NFC` is used.
+
 ### `String.prototype.padStart(targetLength, padString)`
 
 Pads the string from the start with `padString` until the total length reaches `targetLength`. If `padString` is not supplied, spaces are used.
@@ -717,6 +744,8 @@ Response.Write(s.endsWith("World"));        // Output: true
 Response.Write("ab".repeat(3));             // Output: ababab
 Response.Write("5".padStart(3, "0"));       // Output: 005
 Response.Write("5".padEnd(3, "0"));         // Output: 500
+Response.Write("A😀B".codePointAt(1));       // Output: 128512
+Response.Write("e\u0301".normalize("NFC")); // Output: é
 
 var regexError = false;
 try {
@@ -823,6 +852,46 @@ Response.Write(0o744);  // Output: 484
 
 ---
 
+## Global URI Functions
+
+The following URI helper functions are available globally.
+
+### `encodeURI(uri)`
+
+Encodes a complete URI string while preserving URI-reserved separators such as `:`, `/`, `?`, `&`, `=`, and `#`.
+
+### `decodeURI(uri)`
+
+Decodes a complete URI string. Reserved separators remain preserved when they were percent-encoded.
+
+### `encodeURIComponent(component)`
+
+Encodes a URI component (such as one query value) and escapes reserved characters like `=`, `&`, and `+`.
+
+### `decodeURIComponent(component)`
+
+Decodes an encoded URI component.
+
+### Code Example
+
+```javascript
+<script runat="server" language="JScript">
+var full = "https://example.com/a path/?q=hello world&x=1+2#frag";
+Response.Write(encodeURI(full));
+// Output: https://example.com/a%20path/?q=hello%20world&x=1+2#frag
+
+var component = "q=hello world&x=1+2";
+var encoded = encodeURIComponent(component);
+Response.Write(encoded);
+// Output: q%3Dhello%20world%26x%3D1%2B2
+
+Response.Write(decodeURIComponent(encoded));
+// Output: q=hello world&x=1+2
+</script>
+```
+
+---
+
 ## Math Extensions
 
 The following additional methods are available on the `Math` object.
@@ -839,6 +908,20 @@ Returns `1` for positive values, `-1` for negative values, and `0` for zero. Ret
 
 Returns the cube root of `x`.
 
+### Additional Methods
+
+- `Math.acosh(x)`
+- `Math.asinh(x)`
+- `Math.atanh(x)`
+- `Math.expm1(x)`
+- `Math.log1p(x)`
+- `Math.log10(x)`
+- `Math.log2(x)`
+- `Math.hypot(...values)`
+- `Math.fround(x)`
+- `Math.imul(a, b)`
+- `Math.clz32(x)`
+
 ### Code Example
 
 ```javascript
@@ -846,6 +929,9 @@ Returns the cube root of `x`.
 Response.Write(Math.trunc(4.9)); // Output: 4
 Response.Write(Math.sign(-12));  // Output: -1
 Response.Write(Math.cbrt(27));   // Output: 3
+Response.Write(Math.hypot(3, 4)); // Output: 5
+Response.Write(Math.imul(0xffffffff, 5)); // Output: -5
+Response.Write(Math.clz32(1)); // Output: 31
 </script>
 ```
 
