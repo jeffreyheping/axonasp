@@ -718,6 +718,12 @@ func (vm *VM) ensureDynamicMaps() {
 	if vm.jsModuleLoading == nil {
 		vm.jsModuleLoading = make(map[string]struct{})
 	}
+	if vm.jsIntlDateTimeFormatItems == nil {
+		vm.jsIntlDateTimeFormatItems = make(map[int64]*jsIntlDateTimeFormatObject)
+	}
+	if vm.jsIntlNumberFormatItems == nil {
+		vm.jsIntlNumberFormatItems = make(map[int64]*jsIntlNumberFormatObject)
+	}
 	if vm.jsPromiseItems == nil {
 		vm.jsPromiseItems = make(map[int64]*jsPromiseObject)
 	}
@@ -804,6 +810,8 @@ func (vm *VM) resetDynamicMaps() {
 	clear(vm.jsArrayBuffers)
 	clear(vm.jsModuleInstances)
 	clear(vm.jsModuleLoading)
+	clear(vm.jsIntlDateTimeFormatItems)
+	clear(vm.jsIntlNumberFormatItems)
 	clear(vm.jsPromiseItems)
 	clear(vm.jsGeneratorItems)
 	clear(vm.jsMicrotaskQueue)

@@ -1316,6 +1316,45 @@ Response.Write(api.greet("World")); // Output: Hello, World
 
 ---
 
+## Internationalization API (Intl)
+
+### Syntax
+
+```javascript
+var dtf = new Intl.DateTimeFormat(locales[, options]);
+var nfmt = new Intl.NumberFormat(locales[, options]);
+```
+
+### Remarks
+
+- `Intl` is available as a global namespace in JScript.
+- `DateTimeFormat` and `NumberFormat` use AxonASP locale profiles and the current server locale when no locale is supplied.
+- Locale input can be a string or an array-like value. AxonASP uses the first usable locale tag and falls back to the effective server locale, then `en-US`.
+- `Intl.DateTimeFormat` supports `dateStyle`, `timeStyle`, `year`, `month`, `day`, `weekday`, `hour`, `minute`, `second`, and `hour12`.
+- `Intl.NumberFormat` supports `style: "decimal"`, `style: "currency"`, and `style: "percent"`.
+- Unsupported locale values and extra options are ignored or fall back to the closest supported locale profile.
+
+### Code Example
+
+```javascript
+<script runat="server" language="JScript">
+var dateValue = new Date(Date.UTC(2026, 0, 2, 3, 4, 5));
+var enDate = new Intl.DateTimeFormat("en-US", { dateStyle: "short" }).format(dateValue);
+var ptDate = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short" }).format(dateValue);
+var deNumber = new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR", maximumFractionDigits: 2 }).format(1234567.89);
+
+Response.Write(enDate + "\n");
+Response.Write(ptDate + "\n");
+Response.Write(deNumber + "\n");
+// Output:
+// 1/2/2026
+// 02/01/2026
+// € 1.234.567,89
+</script>
+```
+
+---
+
 ## Destructuring Assignment
 
 Destructuring assignment is a syntax that makes it possible to unpack values from arrays, or properties from objects, into distinct variables.

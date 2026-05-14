@@ -1617,6 +1617,7 @@ func (vm *VM) ensureJSRootEnv() {
 	}
 	rootID := vm.allocJSID()
 	bindings := make(map[string]Value, 40)
+	bindings["Intl"] = vm.jsCreateIntlObject()
 	bindings["Math"] = vm.jsCreateMathObject()
 	bindings["Date"] = vm.jsCreateIntrinsicObject("", "Date")
 	bindings["RegExp"] = vm.jsCreateIntrinsicObject("", "RegExp")
@@ -7104,6 +7105,10 @@ func (vm *VM) jsCall(callee Value, thisVal Value, args []Value) Value {
 			return vm.jsPromiseCatch(thisVal, args)
 		case "PromisePrototypeFinally":
 			return vm.jsPromiseFinally(thisVal, args)
+		case "IntlDateTimeFormatFormat":
+			return vm.jsIntlDateTimeFormatFormat(callee, thisVal, args)
+		case "IntlNumberFormatFormat":
+			return vm.jsIntlNumberFormatFormat(callee, thisVal, args)
 		case "ObjectPrototype":
 			return vm.jsCallObjectPrototypeMethod(thisVal, vm.jsObjectStringProperty(callee, "name"), args)
 		case "Set":
@@ -7749,6 +7754,17 @@ func (vm *VM) jsConstruct(constructor Value, args []Value, newTarget Value, isSu
 			if len(args) == 0 {
 				return NewDate(time.Now().In(builtinCurrentLocation(vm)))
 			}
+			if len(args) == 1 {
+				if args[0].Type == VTString {
+					parsed := valueToTimeInLocale(vm, args[0])
+					if parsed.IsZero() {
+						return NewDate(time.Time{})
+					}
+					return NewDate(parsed)
+				}
+				millis := int64(vm.jsToNumber(args[0]).Flt)
+				return NewDate(time.Unix(0, millis*int64(time.Millisecond)).In(builtinCurrentLocation(vm)))
+			}
 			year := int(vm.jsToNumber(args[0]).Flt)
 			month := 0
 			day := 1
@@ -7777,6 +7793,10 @@ func (vm *VM) jsConstruct(constructor Value, args []Value, newTarget Value, isSu
 			loc := builtinCurrentLocation(vm)
 			t := time.Date(year, time.Month(month+1), day, hour, minute, second, millisecond*int(time.Millisecond), loc)
 			return NewDate(t)
+		case "IntlDateTimeFormat":
+			return vm.jsIntlCreateDateTimeFormat(args)
+		case "IntlNumberFormat":
+			return vm.jsIntlCreateNumberFormat(args)
 		case "RegExp":
 			pattern := ""
 			flags := ""

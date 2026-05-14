@@ -381,6 +381,8 @@ type VM struct {
 	jsArrayBuffers                 map[int64][]byte       // backing byte slices for ArrayBuffer objects
 	jsModuleInstances              map[string]*jsEnvFrame // Subphase 8.3: Request-local module registry
 	jsModuleLoading                map[string]struct{}    // Tracks modules currently executing for circular import handling
+	jsIntlDateTimeFormatItems      map[int64]*jsIntlDateTimeFormatObject
+	jsIntlNumberFormatItems        map[int64]*jsIntlNumberFormatObject
 	jsPromiseItems                 map[int64]*jsPromiseObject
 	jsGeneratorItems               map[int64]*jsGeneratorObject
 	jsMicrotaskQueue               []func()
@@ -612,6 +614,8 @@ func NewVM(bytecode []byte, constants []Value, globalCount int) *VM {
 		jsArrayBuffers:                 make(map[int64][]byte),
 		jsModuleInstances:              make(map[string]*jsEnvFrame),
 		jsModuleLoading:                make(map[string]struct{}),
+		jsIntlDateTimeFormatItems:      make(map[int64]*jsIntlDateTimeFormatObject),
+		jsIntlNumberFormatItems:        make(map[int64]*jsIntlNumberFormatObject),
 		jsPromiseItems:                 make(map[int64]*jsPromiseObject),
 		jsGeneratorItems:               make(map[int64]*jsGeneratorObject),
 		jsSymbolGlobalRegistry:         make(map[string]Value),

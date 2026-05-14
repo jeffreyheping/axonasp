@@ -981,6 +981,54 @@ func TestJScriptSymbolObjectKeyHiddenFromKeys(t *testing.T) {
 	}
 }
 
+func TestJScriptIntlNamespaceRegistration(t *testing.T) {
+	out, err := runJScript2(t, jscriptSrc(`
+		Response.Write((Intl !== undefined) ? "yes" : "no");
+		Response.Write("|");
+		Response.Write((Intl.DateTimeFormat !== undefined) ? "yes" : "no");
+		Response.Write("|");
+		Response.Write((Intl.NumberFormat !== undefined) ? "yes" : "no");
+	`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "yes|yes|yes" {
+		t.Errorf("expected 'yes|yes|yes', got %q", out)
+	}
+}
+
+func TestJScriptIntlDateTimeFormatLocales(t *testing.T) {
+	out, err := runJScript2(t, jscriptSrc(`
+		var value = new Date(Date.UTC(2026, 0, 2, 3, 4, 5));
+		var en = new Intl.DateTimeFormat("en-US", { dateStyle: "short" }).format(value);
+		var pt = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short" }).format(value);
+		var de = new Intl.DateTimeFormat("de-DE", { dateStyle: "short" }).format(value);
+		Response.Write(en + "|" + pt + "|" + de);
+	`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "1/2/2026|02/01/2026|02.01.2026" {
+		t.Errorf("expected locale-specific short dates, got %q", out)
+	}
+}
+
+func TestJScriptIntlNumberFormatLocales(t *testing.T) {
+	out, err := runJScript2(t, jscriptSrc(`
+		var value = 1234567.89;
+		var en = new Intl.NumberFormat("en-US", { style: "decimal", maximumFractionDigits: 2 }).format(value);
+		var pt = new Intl.NumberFormat("pt-BR", { style: "decimal", maximumFractionDigits: 2 }).format(value);
+		var de = new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR", maximumFractionDigits: 2 }).format(value);
+		Response.Write(en + "|" + pt + "|" + de);
+	`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "1,234,567.89|1.234.567,89|€ 1.234.567,89" {
+		t.Errorf("expected locale-specific number formatting, got %q", out)
+	}
+}
+
 func TestJScriptArrayFromAndOf(t *testing.T) {
 	out, err := runJScript2(t, jscriptSrc(`
 		var fromArr = Array.from({ length: 3, 0: "a", 1: "b", 2: "c" });

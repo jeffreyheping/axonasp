@@ -38,63 +38,79 @@ type builtinLocaleProfile struct {
 	shortTimeLayout   string
 	decimalSeparator  string
 	thousandSeparator string
+	currencyCode      string
 	currencySymbol    string
 	currencySpacing   string
 }
 
 var builtinLocaleProfiles = []builtinLocaleProfile{
-	{tag: "en-US", mondayLocale: monday.LocaleEnUS, shortDateLayout: "1/2/2006", longTimeLayout: "3:04:05 PM", shortTimeLayout: "3:04 PM", decimalSeparator: ".", thousandSeparator: ",", currencySymbol: "$", currencySpacing: ""},
-	{tag: "en-GB", mondayLocale: monday.LocaleEnGB, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencySymbol: "£", currencySpacing: ""},
-	{tag: "pt-BR", mondayLocale: monday.LocalePtBR, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencySymbol: "R$", currencySpacing: " "},
-	{tag: "pt-PT", mondayLocale: monday.LocalePtPT, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencySymbol: "€", currencySpacing: " "},
-	{tag: "es-ES", mondayLocale: monday.LocaleEsES, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencySymbol: "€", currencySpacing: " "},
-	{tag: "fr-FR", mondayLocale: monday.LocaleFrFR, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: " ", currencySymbol: "€", currencySpacing: " "},
-	{tag: "fr-CA", mondayLocale: monday.LocaleFrCA, shortDateLayout: "2006-01-02", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: " ", currencySymbol: "$", currencySpacing: ""},
-	{tag: "de-DE", mondayLocale: monday.LocaleDeDE, shortDateLayout: "02.01.2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencySymbol: "€", currencySpacing: " "},
-	{tag: "it-IT", mondayLocale: monday.LocaleItIT, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencySymbol: "€", currencySpacing: " "},
-	{tag: "nl-NL", mondayLocale: monday.LocaleNlNL, shortDateLayout: "02-01-2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencySymbol: "€", currencySpacing: " "},
-	{tag: "da-DK", mondayLocale: monday.LocaleDaDK, shortDateLayout: "02/01/2006", longTimeLayout: "15.04.05", shortTimeLayout: "15.04", decimalSeparator: ",", thousandSeparator: ".", currencySymbol: "kr", currencySpacing: " "},
-	{tag: "fi-FI", mondayLocale: monday.LocaleFiFI, shortDateLayout: "02.1.2006", longTimeLayout: "15.04.05", shortTimeLayout: "15.04", decimalSeparator: ",", thousandSeparator: " ", currencySymbol: "€", currencySpacing: " "},
-	{tag: "nb-NO", mondayLocale: monday.LocaleNbNO, shortDateLayout: "02.01.2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: " ", currencySymbol: "kr", currencySpacing: " "},
-	{tag: "pl-PL", mondayLocale: monday.LocalePlPL, shortDateLayout: "02.01.2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: " ", currencySymbol: "zł", currencySpacing: " "},
-	{tag: "cs-CZ", mondayLocale: monday.LocaleCsCZ, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: " ", currencySymbol: "Kč", currencySpacing: " "},
-	{tag: "bg-BG", mondayLocale: monday.LocaleBgBG, shortDateLayout: "2.01.2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: " ", currencySymbol: "лв", currencySpacing: " "},
-	{tag: "ru-RU", mondayLocale: monday.LocaleRuRU, shortDateLayout: "02.01.2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: " ", currencySymbol: "₽", currencySpacing: " "},
-	{tag: "uk-UA", mondayLocale: monday.LocaleUkUA, shortDateLayout: "02.01.2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: " ", currencySymbol: "₴", currencySpacing: " "},
-	{tag: "zh-CN", mondayLocale: monday.LocaleZhCN, shortDateLayout: "2006/1/2", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencySymbol: "¥", currencySpacing: ""},
-	{tag: "zh-TW", mondayLocale: monday.LocaleZhTW, shortDateLayout: "2006/1/2", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencySymbol: "NT$", currencySpacing: ""},
-	{tag: "zh-HK", mondayLocale: monday.LocaleZhHK, shortDateLayout: "2006/1/2", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencySymbol: "HK$", currencySpacing: ""},
-	{tag: "ko-KR", mondayLocale: monday.LocaleKoKR, shortDateLayout: "2006/1/2", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencySymbol: "₩", currencySpacing: ""},
-	{tag: "ja-JP", mondayLocale: monday.LocaleJaJP, shortDateLayout: "2006/1/2", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencySymbol: "¥", currencySpacing: ""},
-	{tag: "el-GR", mondayLocale: monday.LocaleElGR, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencySymbol: "€", currencySpacing: " "},
-	{tag: "id-ID", mondayLocale: monday.LocaleIdID, shortDateLayout: "2/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencySymbol: "Rp", currencySpacing: " "},
-	{tag: "tr-TR", mondayLocale: monday.LocaleTrTR, shortDateLayout: "2.01.2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencySymbol: "₺", currencySpacing: ""},
-	{tag: "hr-HR", mondayLocale: monday.LocaleHrHR, shortDateLayout: "2.1.2006.", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencySymbol: "€", currencySpacing: " "},
-	{tag: "sk-SK", mondayLocale: monday.LocaleSkSK, shortDateLayout: "2. 1. 2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: " ", currencySymbol: "€", currencySpacing: " "},
-	{tag: "th-TH", mondayLocale: monday.LocaleThTH, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencySymbol: "฿", currencySpacing: ""},
+	{tag: "en-US", mondayLocale: monday.LocaleEnUS, shortDateLayout: "1/2/2006", longTimeLayout: "3:04:05 PM", shortTimeLayout: "3:04 PM", decimalSeparator: ".", thousandSeparator: ",", currencyCode: "USD", currencySymbol: "$", currencySpacing: ""},
+	{tag: "en-GB", mondayLocale: monday.LocaleEnGB, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencyCode: "GBP", currencySymbol: "£", currencySpacing: ""},
+	{tag: "pt-BR", mondayLocale: monday.LocalePtBR, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencyCode: "BRL", currencySymbol: "R$", currencySpacing: " "},
+	{tag: "pt-PT", mondayLocale: monday.LocalePtPT, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencyCode: "EUR", currencySymbol: "€", currencySpacing: " "},
+	{tag: "es-ES", mondayLocale: monday.LocaleEsES, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencyCode: "EUR", currencySymbol: "€", currencySpacing: " "},
+	{tag: "fr-FR", mondayLocale: monday.LocaleFrFR, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: " ", currencyCode: "EUR", currencySymbol: "€", currencySpacing: " "},
+	{tag: "fr-CA", mondayLocale: monday.LocaleFrCA, shortDateLayout: "2006-01-02", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: " ", currencyCode: "CAD", currencySymbol: "$", currencySpacing: ""},
+	{tag: "de-DE", mondayLocale: monday.LocaleDeDE, shortDateLayout: "02.01.2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencyCode: "EUR", currencySymbol: "€", currencySpacing: " "},
+	{tag: "it-IT", mondayLocale: monday.LocaleItIT, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencyCode: "EUR", currencySymbol: "€", currencySpacing: " "},
+	{tag: "nl-NL", mondayLocale: monday.LocaleNlNL, shortDateLayout: "02-01-2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencyCode: "EUR", currencySymbol: "€", currencySpacing: " "},
+	{tag: "da-DK", mondayLocale: monday.LocaleDaDK, shortDateLayout: "02/01/2006", longTimeLayout: "15.04.05", shortTimeLayout: "15.04", decimalSeparator: ",", thousandSeparator: ".", currencyCode: "DKK", currencySymbol: "kr", currencySpacing: " "},
+	{tag: "fi-FI", mondayLocale: monday.LocaleFiFI, shortDateLayout: "02.1.2006", longTimeLayout: "15.04.05", shortTimeLayout: "15.04", decimalSeparator: ",", thousandSeparator: " ", currencyCode: "EUR", currencySymbol: "€", currencySpacing: " "},
+	{tag: "nb-NO", mondayLocale: monday.LocaleNbNO, shortDateLayout: "02.01.2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: " ", currencyCode: "NOK", currencySymbol: "kr", currencySpacing: " "},
+	{tag: "pl-PL", mondayLocale: monday.LocalePlPL, shortDateLayout: "02.01.2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: " ", currencyCode: "PLN", currencySymbol: "zł", currencySpacing: " "},
+	{tag: "cs-CZ", mondayLocale: monday.LocaleCsCZ, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: " ", currencyCode: "CZK", currencySymbol: "Kč", currencySpacing: " "},
+	{tag: "bg-BG", mondayLocale: monday.LocaleBgBG, shortDateLayout: "2.01.2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: " ", currencyCode: "BGN", currencySymbol: "лв", currencySpacing: " "},
+	{tag: "ru-RU", mondayLocale: monday.LocaleRuRU, shortDateLayout: "02.01.2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: " ", currencyCode: "RUB", currencySymbol: "₽", currencySpacing: " "},
+	{tag: "uk-UA", mondayLocale: monday.LocaleUkUA, shortDateLayout: "02.01.2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: " ", currencyCode: "UAH", currencySymbol: "₴", currencySpacing: " "},
+	{tag: "zh-CN", mondayLocale: monday.LocaleZhCN, shortDateLayout: "2006/1/2", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencyCode: "CNY", currencySymbol: "¥", currencySpacing: ""},
+	{tag: "zh-TW", mondayLocale: monday.LocaleZhTW, shortDateLayout: "2006/1/2", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencyCode: "TWD", currencySymbol: "NT$", currencySpacing: ""},
+	{tag: "zh-HK", mondayLocale: monday.LocaleZhHK, shortDateLayout: "2006/1/2", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencyCode: "HKD", currencySymbol: "HK$", currencySpacing: ""},
+	{tag: "ko-KR", mondayLocale: monday.LocaleKoKR, shortDateLayout: "2006/1/2", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencyCode: "KRW", currencySymbol: "₩", currencySpacing: ""},
+	{tag: "ja-JP", mondayLocale: monday.LocaleJaJP, shortDateLayout: "2006/1/2", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencyCode: "JPY", currencySymbol: "¥", currencySpacing: ""},
+	{tag: "el-GR", mondayLocale: monday.LocaleElGR, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencyCode: "EUR", currencySymbol: "€", currencySpacing: " "},
+	{tag: "id-ID", mondayLocale: monday.LocaleIdID, shortDateLayout: "2/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencyCode: "IDR", currencySymbol: "Rp", currencySpacing: " "},
+	{tag: "tr-TR", mondayLocale: monday.LocaleTrTR, shortDateLayout: "2.01.2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencyCode: "TRY", currencySymbol: "₺", currencySpacing: ""},
+	{tag: "hr-HR", mondayLocale: monday.LocaleHrHR, shortDateLayout: "2.1.2006.", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencyCode: "EUR", currencySymbol: "€", currencySpacing: " "},
+	{tag: "sk-SK", mondayLocale: monday.LocaleSkSK, shortDateLayout: "2. 1. 2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: " ", currencyCode: "EUR", currencySymbol: "€", currencySpacing: " "},
+	{tag: "th-TH", mondayLocale: monday.LocaleThTH, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencyCode: "THB", currencySymbol: "฿", currencySpacing: ""},
 	// English variants
-	{tag: "en-AU", mondayLocale: monday.LocaleEnGB, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencySymbol: "$", currencySpacing: ""},
-	{tag: "en-CA", mondayLocale: monday.LocaleEnUS, shortDateLayout: "1/2/2006", longTimeLayout: "3:04:05 PM", shortTimeLayout: "3:04 PM", decimalSeparator: ".", thousandSeparator: ",", currencySymbol: "$", currencySpacing: ""},
-	{tag: "en-IN", mondayLocale: monday.LocaleEnUS, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencySymbol: "₹", currencySpacing: ""},
-	{tag: "en-IE", mondayLocale: monday.LocaleEnGB, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencySymbol: "€", currencySpacing: " "},
-	{tag: "en-NZ", mondayLocale: monday.LocaleEnGB, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencySymbol: "$", currencySpacing: ""},
-	{tag: "en-ZA", mondayLocale: monday.LocaleEnGB, shortDateLayout: "2006/01/02", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencySymbol: "R", currencySpacing: " "},
+	{tag: "en-AU", mondayLocale: monday.LocaleEnGB, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencyCode: "AUD", currencySymbol: "$", currencySpacing: ""},
+	{tag: "en-CA", mondayLocale: monday.LocaleEnUS, shortDateLayout: "1/2/2006", longTimeLayout: "3:04:05 PM", shortTimeLayout: "3:04 PM", decimalSeparator: ".", thousandSeparator: ",", currencyCode: "CAD", currencySymbol: "$", currencySpacing: ""},
+	{tag: "en-IN", mondayLocale: monday.LocaleEnUS, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencyCode: "INR", currencySymbol: "₹", currencySpacing: ""},
+	{tag: "en-IE", mondayLocale: monday.LocaleEnGB, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencyCode: "EUR", currencySymbol: "€", currencySpacing: " "},
+	{tag: "en-NZ", mondayLocale: monday.LocaleEnGB, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencyCode: "NZD", currencySymbol: "$", currencySpacing: ""},
+	{tag: "en-ZA", mondayLocale: monday.LocaleEnGB, shortDateLayout: "2006/01/02", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencyCode: "ZAR", currencySymbol: "R", currencySpacing: " "},
 	// Spanish variants
-	{tag: "es-MX", mondayLocale: monday.LocaleEsES, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencySymbol: "$", currencySpacing: ""},
-	{tag: "es-AR", mondayLocale: monday.LocaleEsES, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencySymbol: "$", currencySpacing: ""},
-	{tag: "es-CO", mondayLocale: monday.LocaleEsES, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencySymbol: "$", currencySpacing: ""},
-	{tag: "es-CL", mondayLocale: monday.LocaleEsES, shortDateLayout: "02-01-2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencySymbol: "$", currencySpacing: ""},
-	{tag: "es-PE", mondayLocale: monday.LocaleEsES, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencySymbol: "S/", currencySpacing: ""},
+	{tag: "es-MX", mondayLocale: monday.LocaleEsES, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencyCode: "MXN", currencySymbol: "$", currencySpacing: ""},
+	{tag: "es-AR", mondayLocale: monday.LocaleEsES, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencyCode: "ARS", currencySymbol: "$", currencySpacing: ""},
+	{tag: "es-CO", mondayLocale: monday.LocaleEsES, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencyCode: "COP", currencySymbol: "$", currencySpacing: ""},
+	{tag: "es-CL", mondayLocale: monday.LocaleEsES, shortDateLayout: "02-01-2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencyCode: "CLP", currencySymbol: "$", currencySpacing: ""},
+	{tag: "es-PE", mondayLocale: monday.LocaleEsES, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: ",", currencyCode: "PEN", currencySymbol: "S/", currencySpacing: ""},
 	// French variants
-	{tag: "fr-BE", mondayLocale: monday.LocaleFrFR, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: " ", currencySymbol: "€", currencySpacing: " "},
-	{tag: "fr-CH", mondayLocale: monday.LocaleFrFR, shortDateLayout: "02.01.2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: "'", currencySymbol: "CHF", currencySpacing: " "},
+	{tag: "fr-BE", mondayLocale: monday.LocaleFrFR, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: " ", currencyCode: "EUR", currencySymbol: "€", currencySpacing: " "},
+	{tag: "fr-CH", mondayLocale: monday.LocaleFrFR, shortDateLayout: "02.01.2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: "'", currencyCode: "CHF", currencySymbol: "CHF", currencySpacing: " "},
 	// German variants
-	{tag: "de-AT", mondayLocale: monday.LocaleDeDE, shortDateLayout: "02.01.2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencySymbol: "€", currencySpacing: " "},
-	{tag: "de-CH", mondayLocale: monday.LocaleDeDE, shortDateLayout: "02.01.2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: "'", currencySymbol: "CHF", currencySpacing: " "},
+	{tag: "de-AT", mondayLocale: monday.LocaleDeDE, shortDateLayout: "02.01.2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencyCode: "EUR", currencySymbol: "€", currencySpacing: " "},
+	{tag: "de-CH", mondayLocale: monday.LocaleDeDE, shortDateLayout: "02.01.2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: "'", currencyCode: "CHF", currencySymbol: "CHF", currencySpacing: " "},
 	// Italian variant
-	{tag: "it-CH", mondayLocale: monday.LocaleItIT, shortDateLayout: "02.01.2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: "'", currencySymbol: "CHF", currencySpacing: " "},
+	{tag: "it-CH", mondayLocale: monday.LocaleItIT, shortDateLayout: "02.01.2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ".", thousandSeparator: "'", currencyCode: "CHF", currencySymbol: "CHF", currencySpacing: " "},
 	// Dutch variant
-	{tag: "nl-BE", mondayLocale: monday.LocaleNlNL, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencySymbol: "€", currencySpacing: " "},
+	{tag: "nl-BE", mondayLocale: monday.LocaleNlNL, shortDateLayout: "02/01/2006", longTimeLayout: "15:04:05", shortTimeLayout: "15:04", decimalSeparator: ",", thousandSeparator: ".", currencyCode: "EUR", currencySymbol: "€", currencySpacing: " "},
+}
+
+// builtinCurrencySymbolForCode resolves the currency symbol and spacing for one ISO 4217 currency
+// code by scanning builtinLocaleProfiles. Returns the symbol, spacing, and true when found.
+func builtinCurrencySymbolForCode(code string) (symbol string, spacing string, ok bool) {
+	upper := strings.ToUpper(strings.TrimSpace(code))
+	if upper == "" {
+		return "", "", false
+	}
+	for i := range builtinLocaleProfiles {
+		if builtinLocaleProfiles[i].currencyCode == upper {
+			return builtinLocaleProfiles[i].currencySymbol, builtinLocaleProfiles[i].currencySpacing, true
+		}
+	}
+	return "", "", false
 }
 
 var builtinLocaleMatcher = newBuiltinLocaleMatcher()
