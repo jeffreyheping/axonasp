@@ -388,6 +388,7 @@ type VM struct {
 	jsFinalizationRegistryItems    map[int64]*jsFinalizationRegistry
 	jsArrayIterators               map[int64]*jsArrayIterator
 	jsStringIterators              map[int64]*jsStringIterator
+	jsRegExpStringIterators        map[int64]*jsRegExpStringIterator
 	jsArrayBuffers                 map[int64][]byte       // backing byte slices for ArrayBuffer objects
 	jsModuleInstances              map[string]*jsEnvFrame // Subphase 8.3: Request-local module registry
 	jsModuleLoading                map[string]struct{}    // Tracks modules currently executing for circular import handling
@@ -628,6 +629,7 @@ func NewVM(bytecode []byte, constants []Value, globalCount int) *VM {
 		jsFinalizationRegistryItems:    make(map[int64]*jsFinalizationRegistry),
 		jsArrayIterators:               make(map[int64]*jsArrayIterator),
 		jsStringIterators:              make(map[int64]*jsStringIterator),
+		jsRegExpStringIterators:        make(map[int64]*jsRegExpStringIterator),
 		jsArrayBuffers:                 make(map[int64][]byte),
 		jsModuleInstances:              make(map[string]*jsEnvFrame),
 		jsModuleLoading:                make(map[string]struct{}),

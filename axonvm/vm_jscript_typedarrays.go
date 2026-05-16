@@ -62,6 +62,8 @@ const (
 	jsWellKnownSymbolToPrimitive  int64 = -5
 	jsWellKnownSymbolDispose      int64 = -6
 	jsWellKnownSymbolAsyncDispose int64 = -7
+	jsWellKnownSymbolUnscopables  int64 = -8
+	jsWellKnownSymbolMatchAll     int64 = -9
 )
 
 // jsWellKnownSymbolValue returns a pre-constructed Value for a well-known symbol ID.

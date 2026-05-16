@@ -27,6 +27,15 @@ type jsStringIterator struct {
 	index  int
 }
 
+// jsRegExpStringIterator represents the state of a RegExp String Iterator.
+type jsRegExpStringIterator struct {
+	iteratingRegExp Value
+	iteratedString  string
+	global          bool
+	unicode         bool
+	done            bool
+}
+
 // jsCreateArrayIterator creates a new Array Iterator object.
 func (vm *VM) jsCreateArrayIterator(target Value, kind int) Value {
 	id := vm.allocJSID()
@@ -79,6 +88,36 @@ func (vm *VM) jsCreateStringIterator(target string) Value {
 	return Value{Type: VTJSObject, Num: id}
 }
 
+// jsCreateRegExpStringIterator creates a new RegExp String Iterator object.
+func (vm *VM) jsCreateRegExpStringIterator(reVal Value, iteratedString string, global bool, unicode bool) Value {
+	id := vm.allocJSID()
+	obj := map[string]Value{
+		"__js_type": NewString("RegExp String Iterator"),
+		"__js_ctor": NewString("RegExp String Iterator"),
+	}
+	vm.jsObjectItems[id] = obj
+	vm.jsPropertyItems[id] = make(map[string]jsPropertyDescriptor, 4)
+
+	// Add [Symbol.iterator]() { return this; } for ES6+ compliance
+	itKey := jsSymbolPropertyPrefix + strconv.FormatInt(jsWellKnownSymbolIterator, 10)
+	itFn := vm.jsCreateNativeFunction("[Symbol.iterator]", "RegExpStringIteratorIterator")
+	vm.jsSetDescriptor(id, itKey, jsPropertyDescriptor{
+		Value:        itFn,
+		HasValue:     true,
+		Enumerable:   false,
+		Configurable: true,
+		Writable:     true,
+	})
+
+	vm.jsRegExpStringIterators[id] = &jsRegExpStringIterator{
+		iteratingRegExp: reVal,
+		iteratedString:  iteratedString,
+		global:          global,
+		unicode:         unicode,
+	}
+	return Value{Type: VTJSObject, Num: id}
+}
+
 // jsIteratorNextResult creates the { value: ..., done: ... } object.
 func (vm *VM) jsIteratorNextResult(value Value, done bool) Value {
 	id := vm.allocJSID()
@@ -115,6 +154,26 @@ func (vm *VM) jsPopulatePrototypes(bindings map[string]Value) {
 				Configurable: true,
 				Writable:     true,
 			})
+
+			// Array.prototype[Symbol.unscopables]
+			unscopablesKey := jsSymbolPropertyPrefix + strconv.FormatInt(jsWellKnownSymbolUnscopables, 10)
+			unscopablesID := vm.allocJSID()
+			unscopablesObj := make(map[string]Value)
+			for _, name := range []string{"at", "copyWithin", "entries", "fill", "find", "findIndex", "findLast", "findLastIndex", "flat", "flatMap", "includes", "keys", "values"} {
+				unscopablesObj[name] = NewBool(true)
+			}
+			vm.jsObjectItems[unscopablesID] = unscopablesObj
+			vm.jsPropertyItems[unscopablesID] = make(map[string]jsPropertyDescriptor, 16)
+			for k, v := range unscopablesObj {
+				vm.jsSetDescriptor(unscopablesID, k, jsDefaultPropertyDescriptor(v))
+			}
+			vm.jsSetDescriptor(proto.Num, unscopablesKey, jsPropertyDescriptor{
+				Value:        Value{Type: VTJSObject, Num: unscopablesID},
+				HasValue:     true,
+				Enumerable:   false,
+				Configurable: true,
+				Writable:     false,
+			})
 		}
 	}
 
@@ -125,6 +184,22 @@ func (vm *VM) jsPopulatePrototypes(bindings map[string]Value) {
 			itFn := vm.jsCreateNativeFunction("[Symbol.iterator]", "StringIteratorFactory")
 			vm.jsSetDescriptor(proto.Num, itKey, jsPropertyDescriptor{
 				Value:        itFn,
+				HasValue:     true,
+				Enumerable:   false,
+				Configurable: true,
+				Writable:     true,
+			})
+			vm.jsSetDescriptor(proto.Num, "matchAll", jsDefaultPropertyDescriptor(vm.jsCreateNativeFunction("matchAll", "StringPrototypeMatchAll")))
+		}
+	}
+
+	// RegExp.prototype[Symbol.matchAll]
+	if reCtor, ok := bindings["RegExp"]; ok {
+		if proto, deferred := vm.jsMemberGet(reCtor, "prototype"); !deferred && proto.Type == VTJSObject {
+			matchAllKey := jsSymbolPropertyPrefix + strconv.FormatInt(jsWellKnownSymbolMatchAll, 10)
+			matchAllFn := vm.jsCreateNativeFunction("[Symbol.matchAll]", "RegExpPrototypeMatchAll")
+			vm.jsSetDescriptor(proto.Num, matchAllKey, jsPropertyDescriptor{
+				Value:        matchAllFn,
 				HasValue:     true,
 				Enumerable:   false,
 				Configurable: true,
@@ -281,6 +356,35 @@ func (vm *VM) jsStringIteratorNext(itObj Value) Value {
 	return vm.jsIteratorNextResult(val, false)
 }
 
+// jsRegExpStringIteratorNext implements the next() method for RegExp String Iterators.
+func (vm *VM) jsRegExpStringIteratorNext(itObj Value) Value {
+	it, ok := vm.jsRegExpStringIterators[itObj.Num]
+	if !ok || it.done {
+		return vm.jsIteratorNextResult(Value{Type: VTJSUndefined}, true)
+	}
+
+	match := vm.jsRegExpExec(it.iteratingRegExp, it.iteratedString)
+	if match.Type == VTNull {
+		it.done = true
+		return vm.jsIteratorNextResult(Value{Type: VTJSUndefined}, true)
+	}
+
+	if !it.global {
+		it.done = true
+		return vm.jsIteratorNextResult(match, false)
+	}
+
+	matchStr := vm.valueToString(vm.jsIndexGet(match, NewInteger(0)))
+	if matchStr == "" {
+		lastIdxVal, _ := vm.jsMemberGet(it.iteratingRegExp, "lastIndex")
+		lastIdx := int(vm.jsToNumber(lastIdxVal).Flt)
+		// Advance lastIndex to avoid infinite loop on empty matches
+		vm.jsMemberSet(it.iteratingRegExp, "lastIndex", NewInteger(int64(lastIdx+1)))
+	}
+
+	return vm.jsIteratorNextResult(match, false)
+}
+
 // jsGetIterator obtains an iterator from an object via Symbol.iterator.
 func (vm *VM) jsGetIterator(source Value) Value {
 	if source.Type == VTNull || source.Type == VTJSUndefined {
@@ -297,7 +401,7 @@ func (vm *VM) jsGetIterator(source Value) Value {
 	}
 	if source.Type == VTJSObject {
 		class := vm.jsObjectStringProperty(source, "__js_type")
-		if class == "Array Iterator" || class == "String Iterator" {
+		if class == "Array Iterator" || class == "String Iterator" || class == "RegExp String Iterator" {
 			return source
 		}
 	}

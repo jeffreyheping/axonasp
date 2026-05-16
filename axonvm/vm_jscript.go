@@ -1818,10 +1818,12 @@ func (vm *VM) jsCreateSymbolObject() Value {
 	obj["toPrimitive"] = jsWellKnownSymbolValue(jsWellKnownSymbolToPrimitive, "Symbol.toPrimitive")
 	obj["dispose"] = jsWellKnownSymbolValue(jsWellKnownSymbolDispose, "Symbol.dispose")
 	obj["asyncDispose"] = jsWellKnownSymbolValue(jsWellKnownSymbolAsyncDispose, "Symbol.asyncDispose")
+	obj["unscopables"] = jsWellKnownSymbolValue(jsWellKnownSymbolUnscopables, "Symbol.unscopables")
+	obj["matchAll"] = jsWellKnownSymbolValue(jsWellKnownSymbolMatchAll, "Symbol.matchAll")
 	vm.jsObjectItems[objID] = obj
-	props := make(map[string]jsPropertyDescriptor, 6)
+	props := make(map[string]jsPropertyDescriptor, 8)
 	// Make well-known symbols read-only, non-enumerable, non-configurable
-	for _, name := range []string{"iterator", "toStringTag", "species", "hasInstance", "toPrimitive", "dispose", "asyncDispose"} {
+	for _, name := range []string{"iterator", "toStringTag", "species", "hasInstance", "toPrimitive", "dispose", "asyncDispose", "unscopables", "matchAll"} {
 		props[name] = jsPropertyDescriptor{
 			Value: obj[name], HasValue: true,
 			Enumerable: false, Configurable: false, Writable: false,
@@ -2237,6 +2239,20 @@ func (vm *VM) jsGetName(name string) Value {
 	return Value{Type: VTJSUndefined}
 }
 
+// jsIsUnscopable checks if a property name is marked as unscopable on the target object.
+func (vm *VM) jsIsUnscopable(target Value, name string) bool {
+	if target.Type != VTJSObject && target.Type != VTArray && target.Type != VTJSProxy {
+		return false
+	}
+	unscopablesKey := jsSymbolPropertyPrefix + strconv.FormatInt(jsWellKnownSymbolUnscopables, 10)
+	unscopables, deferred := vm.jsMemberGet(target, unscopablesKey)
+	if deferred || (unscopables.Type != VTJSObject && unscopables.Type != VTArray && unscopables.Type != VTJSProxy) {
+		return false
+	}
+	val, _ := vm.jsMemberGet(unscopables, name)
+	return vm.asBool(val)
+}
+
 func (vm *VM) jsResolveWithBinding(name string) (Value, bool) {
 	if len(vm.withStack) == 0 {
 		return Value{Type: VTJSUndefined}, false
@@ -2244,6 +2260,9 @@ func (vm *VM) jsResolveWithBinding(name string) (Value, bool) {
 	for i := len(vm.withStack) - 1; i >= 0; i-- {
 		target := vm.withStack[i]
 		if !vm.jsHasProperty(target, name) {
+			continue
+		}
+		if vm.jsIsUnscopable(target, name) {
 			continue
 		}
 		value, deferred := vm.jsMemberGet(target, name)
@@ -2262,6 +2281,9 @@ func (vm *VM) jsAssignWithBinding(name string, val Value) bool {
 	for i := len(vm.withStack) - 1; i >= 0; i-- {
 		target := vm.withStack[i]
 		if !vm.jsHasProperty(target, name) {
+			continue
+		}
+		if vm.jsIsUnscopable(target, name) {
 			continue
 		}
 		vm.jsMemberSet(target, name, val)
@@ -4262,6 +4284,10 @@ func (vm *VM) jsCallMember(target Value, member string, args []Value) (Value, bo
 		case "String Iterator":
 			if strings.EqualFold(member, "next") {
 				return vm.jsStringIteratorNext(target), true
+			}
+		case "RegExp String Iterator":
+			if strings.EqualFold(member, "next") {
+				return vm.jsRegExpStringIteratorNext(target), true
 			}
 		case "Uint8Array":
 			switch {
@@ -8118,6 +8144,43 @@ func (vm *VM) jsCall(callee Value, thisVal Value, args []Value) Value {
 			return vm.jsCreateArrayIterator(thisVal, 2)
 		case "StringIteratorFactory":
 			return vm.jsCreateStringIterator(vm.valueToString(thisVal))
+		case "RegExpStringIteratorIterator":
+			return thisVal
+		case "StringPrototypeMatchAll":
+			if len(args) == 0 {
+				reCtor := vm.jsGetName("RegExp")
+				rx := vm.jsNew(reCtor, []Value{Value{Type: VTJSUndefined}})
+				return vm.jsRegExpMatchAll(rx, vm.valueToString(thisVal))
+			}
+			regexp := args[0]
+			if regexp.Type != VTNull && regexp.Type != VTJSUndefined {
+				isRegExp := false
+				if regexp.Type == VTJSObject {
+					if vm.jsObjectStringProperty(regexp, "__js_type") == "RegExp" {
+						isRegExp = true
+					}
+				}
+				if isRegExp {
+					flags := vm.jsObjectStringProperty(regexp, "flags")
+					if !strings.Contains(flags, "g") {
+						vm.jsThrowTypeError("String.prototype.matchAll called with a non-global RegExp argument")
+						return Value{Type: VTJSUndefined}
+					}
+				}
+			}
+			reCtor := vm.jsGetName("RegExp")
+			rx := vm.jsNew(reCtor, []Value{regexp, NewString("g")})
+			return vm.jsRegExpMatchAll(rx, vm.valueToString(thisVal))
+		case "RegExpPrototypeMatchAll":
+			if thisVal.Type != VTJSObject && thisVal.Type != VTJSProxy {
+				vm.jsThrowTypeError("RegExp.prototype[Symbol.matchAll] called on non-object")
+				return Value{Type: VTJSUndefined}
+			}
+			input := ""
+			if len(args) > 0 {
+				input = vm.valueToString(args[0])
+			}
+			return vm.jsRegExpMatchAll(thisVal, input)
 		case "PromiseResolve":
 			promise := vm.jsObjectItems[callee.Num]["__js_promise"]
 			resolution := jsArgOrUndefined(args, 0)
@@ -8911,19 +8974,31 @@ func (vm *VM) jsConstruct(constructor Value, args []Value, newTarget Value, isSu
 			pattern := ""
 			flags := ""
 			if len(args) > 0 {
-				pattern = vm.valueToString(args[0])
-			}
-			if len(args) > 1 {
-				flags = vm.valueToString(args[1])
+				if args[0].Type == VTJSObject && vm.jsObjectStringProperty(args[0], "__js_type") == "RegExp" {
+					pattern = vm.jsObjectStringProperty(args[0], "pattern")
+					if len(args) > 1 && args[1].Type != VTJSUndefined {
+						flags = vm.valueToString(args[1])
+					} else {
+						flags = vm.jsObjectStringProperty(args[0], "flags")
+					}
+				} else {
+					pattern = vm.valueToString(args[0])
+					if len(args) > 1 {
+						flags = vm.valueToString(args[1])
+					}
+				}
 			}
 			objID := vm.allocJSID()
-			obj := make(map[string]Value, 3)
+			obj := make(map[string]Value, 8)
 			obj["__js_type"] = NewString("RegExp")
 			obj["pattern"] = NewString(pattern)
 			obj["flags"] = NewString(flags)
 			obj["lastIndex"] = NewInteger(0)
+			if proto := vm.jsGetIntrinsicPrototype("RegExp"); proto.Type == VTJSObject {
+				obj["__js_proto"] = proto
+			}
 			vm.jsObjectItems[objID] = obj
-			vm.jsPropertyItems[objID] = make(map[string]jsPropertyDescriptor, 4)
+			vm.jsPropertyItems[objID] = make(map[string]jsPropertyDescriptor, 8)
 			return Value{Type: VTJSObject, Num: objID}
 		case "Enumerator":
 			source := Value{Type: VTJSUndefined}
@@ -9246,6 +9321,13 @@ func (vm *VM) jsGetCompiledRegExp(objID int64) (*regexp2.Regexp, error) {
 	return re, nil
 }
 
+func (vm *VM) jsRegExpMatchAll(reVal Value, input string) Value {
+	flags := vm.jsRegExpGetFlags(reVal)
+	isGlobal := strings.Contains(flags, "g")
+	isUnicode := strings.Contains(flags, "u")
+	return vm.jsCreateRegExpStringIterator(reVal, input, isGlobal, isUnicode)
+}
+
 func (vm *VM) jsRegExpExec(reVal Value, input string) Value {
 	objID := reVal.Num
 	re, err := vm.jsGetCompiledRegExp(objID)
@@ -9268,14 +9350,11 @@ func (vm *VM) jsRegExpExec(reVal Value, input string) Value {
 	}
 
 	// JScript lastIndex is in UTF-16 code units.
-	// We need to convert it to rune index for regexp2.
+	// We need to convert it to byte offset for regexp2.
 	runeOffset := 0
 	if lastIndex > 0 {
 		utf16Count := 0
-		for range input {
-			if utf16Count >= lastIndex {
-				break
-			}
+		for utf16Count < lastIndex && runeOffset < len(input) {
 			r, size := utf8.DecodeRuneInString(input[runeOffset:])
 			if r >= 0x10000 {
 				utf16Count += 2
@@ -9283,12 +9362,6 @@ func (vm *VM) jsRegExpExec(reVal Value, input string) Value {
 				utf16Count += 1
 			}
 			runeOffset += size
-			if utf16Count > lastIndex {
-				// We landed in the middle of a surrogate pair?
-				// JScript spec says to start at the next full character or handle it.
-				// For now, let's just break.
-				break
-			}
 		}
 		if utf16Count < lastIndex {
 			// lastIndex is beyond string length
