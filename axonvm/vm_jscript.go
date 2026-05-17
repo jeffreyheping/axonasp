@@ -2846,7 +2846,7 @@ func (vm *VM) jsPrepareLocalFrame(localCount int, savedSP int) bool {
 	base := savedSP + 1
 	end := base + localCount - 1
 	if end >= len(vm.stack) {
-		vm.raise(vbscript.StackOverflow, "JScript local frame exceeds VM stack capacity")
+		vm.jsThrowOutOfStackSpace()
 		return false
 	}
 	for i := base; i <= end; i++ {
@@ -2855,6 +2855,11 @@ func (vm *VM) jsPrepareLocalFrame(localCount int, savedSP int) bool {
 	vm.fp = base
 	vm.sp = end
 	return true
+}
+
+// jsThrowOutOfStackSpace throws the canonical JScript stack overflow runtime error.
+func (vm *VM) jsThrowOutOfStackSpace() {
+	vm.jsThrowJSError(jscript.OutOfStackSpace)
 }
 
 func (vm *VM) jsBeginFunctionCall(fn Value, thisVal Value, args []Value, ctorObj Value, isCtor bool, newTarget Value, isSuperCall bool) bool {
@@ -2926,6 +2931,35 @@ func (vm *VM) jsBeginFunctionCall(fn Value, thisVal Value, args []Value, ctorObj
 	return true
 }
 
+// jsBeginDirectCall starts one user-defined JScript function call on the active VM without cloning.
+func (vm *VM) jsBeginDirectCall(callee Value, thisVal Value, args []Value) bool {
+	if callee.Type != VTJSFunction {
+		return false
+	}
+	closure, ok := vm.jsFunctionItems[callee.Num]
+	if !ok || closure == nil {
+		return false
+	}
+	if closure.isClassConstructor {
+		vm.jsThrowTypeError("Class constructor cannot be invoked without 'new'")
+		return false
+	}
+	if closure.isGenerator {
+		return false
+	}
+	if closure.isAsync {
+		return false
+	}
+	if closure.isBound {
+		return false
+	}
+	if len(vm.jsCallStack) >= jsMaxCallStackDepth {
+		vm.jsThrowJSError(jscript.OutOfStackSpace)
+		return false
+	}
+	return vm.jsBeginFunctionCall(callee, thisVal, args, Value{Type: VTJSUndefined}, false, Value{Type: VTJSUndefined}, false)
+}
+
 // jsEnvHasCapturedClosures reports whether any closure currently captures envID.
 func (vm *VM) jsEnvHasCapturedClosures(envID int64) bool {
 	if envID == 0 {
@@ -2937,6 +2971,30 @@ func (vm *VM) jsEnvHasCapturedClosures(envID int64) bool {
 		}
 	}
 	return false
+}
+
+// jsReleaseEnvFrame drops one non-captured JScript env frame and its transient arguments object.
+func (vm *VM) jsReleaseEnvFrame(envID int64) {
+	if envID == 0 || envID == vm.jsRootEnvID {
+		return
+	}
+	if vm.jsEnvHasCapturedClosures(envID) {
+		return
+	}
+	env, ok := vm.jsEnvItems[envID]
+	if !ok {
+		return
+	}
+	if env != nil && env.bindings != nil {
+		if argsObj, hasArgs := env.bindings["arguments"]; hasArgs && argsObj.Type == VTJSObject {
+			delete(vm.jsArgumentsItems, argsObj.Num)
+			delete(vm.jsObjectItems, argsObj.Num)
+			delete(vm.jsPropertyItems, argsObj.Num)
+			delete(vm.jsObjectStateItems, argsObj.Num)
+		}
+		clear(env.bindings)
+	}
+	delete(vm.jsEnvItems, envID)
 }
 
 // jsRefreshArgumentsObject rewrites one existing arguments object in place.
@@ -3006,7 +3064,7 @@ func (vm *VM) jsTailCallValue(callee Value, thisVal Value, args []Value) bool {
 
 	canReuseEnv := vm.jsActiveEnvID != 0 && !vm.jsEnvHasCapturedClosures(vm.jsActiveEnvID)
 	envID := vm.jsActiveEnvID
-	bindings := make(map[string]Value, len(closure.params)+2)
+	var bindings map[string]Value
 	reusedArgs := Value{Type: VTJSUndefined}
 	if canReuseEnv {
 		if env, ok := vm.jsEnvItems[envID]; ok && env != nil {
@@ -3024,7 +3082,9 @@ func (vm *VM) jsTailCallValue(callee Value, thisVal Value, args []Value) bool {
 		}
 	}
 	if !canReuseEnv {
+		vm.jsReleaseEnvFrame(vm.jsActiveEnvID)
 		envID = vm.allocJSID()
+		bindings = make(map[string]Value, len(closure.params)+2)
 		vm.jsEnvItems[envID] = &jsEnvFrame{parentID: closure.envID, bindings: bindings}
 	}
 
@@ -3808,8 +3868,10 @@ func (vm *VM) jsReturn(retVal Value) {
 		vm.push(retVal)
 		return
 	}
+	currentEnvID := vm.jsActiveEnvID
 	frame := vm.jsCallStack[len(vm.jsCallStack)-1]
 	vm.jsCallStack = vm.jsCallStack[:len(vm.jsCallStack)-1]
+	vm.jsReleaseEnvFrame(currentEnvID)
 	if len(vm.jsTryStack) > frame.tryDepth {
 		vm.jsTryStack = vm.jsTryStack[:frame.tryDepth]
 	}
@@ -8534,7 +8596,29 @@ func (vm *VM) jsThrowTypeError(msg string) {
 func (vm *VM) jsThrowJSError(code jscript.JSSyntaxErrorCode) {
 	msg := code.String()
 	if len(vm.jsTryStack) == 0 {
-		vm.raise(vbscript.VBSyntaxErrorCode(code), msg)
+		vbCode := vbscript.VBSyntaxErrorCode(code)
+		vme := &VMError{
+			Code:           vbCode,
+			Line:           vm.lastLine,
+			Column:         vm.lastColumn,
+			Msg:            msg,
+			ASPCode:        int(code),
+			ASPDescription: msg,
+			Category:       "JavaScript runtime",
+			Description:    msg,
+			Number:         vbscript.HRESULTFromVBScriptCode(vbCode),
+			Source:         "JavaScript runtime error",
+		}
+
+		vm.errSetFromVMError(vme)
+
+		if vm.onResumeNext || vm.executeGlobalResumeGuard {
+			vm.lastError = vme
+			vm.skipToNextStmt = true
+			return
+		}
+
+		panic(vme)
 		return
 	}
 	target := vm.jsTryStack[len(vm.jsTryStack)-1]

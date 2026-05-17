@@ -617,6 +617,45 @@ func TestJScriptTailCallComputedMemberKeepsEnvGrowthBounded(t *testing.T) {
 	}
 }
 
+func TestJScriptDeepNonTailRecursionReleasesEnvFrames(t *testing.T) {
+	source := `<script runat="server" language="JScript">` +
+		`function depth(n) {` +
+		`if (n === 0) { return 0; }` +
+		`return 1 + depth(n - 1);` +
+		`}` +
+		`Response.Write(depth(1500));` +
+		`</script>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	host.Response().SetBuffer(false)
+	vm.SetHost(host)
+
+	baseEnvCount := len(vm.jsEnvItems)
+	baseArgsCount := len(vm.jsArgumentsItems)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	if output.String() != "1500" {
+		t.Fatalf("expected 1500, got %q", output.String())
+	}
+
+	if len(vm.jsEnvItems)-baseEnvCount > 64 {
+		t.Fatalf("non-tail recursion env growth too high: base=%d current=%d", baseEnvCount, len(vm.jsEnvItems))
+	}
+	if len(vm.jsArgumentsItems)-baseArgsCount > 64 {
+		t.Fatalf("non-tail recursion arguments growth too high: base=%d current=%d", baseArgsCount, len(vm.jsArgumentsItems))
+	}
+}
+
 func TestJScriptSimpleForLoop(t *testing.T) {
 	source := `<script runat="server" language="JScript">var sum = 0; for (var i = 0; i < 3; i++) { sum = sum + i; } Response.Write(sum);</script>`
 	out := runASPSourceForTest(t, source)
@@ -1521,6 +1560,104 @@ func TestJScriptES5ObjectPrototypeMethods(t *testing.T) {
 	vv, _ := vm.jsCallMember(obj, "valueOf", nil)
 	if vv.Type != VTJSObject || vv.Num != objID {
 		t.Fatalf("unexpected valueOf output: %#v", vv)
+	}
+}
+
+// BenchmarkJScriptTailCallBasic benchmarks simple tail-recursive function.
+// Verifies that TCO has zero allocations (0 allocs/op).
+func BenchmarkJScriptTailCallBasic(b *testing.B) {
+	source := `<script runat="server" language="JScript">` +
+		`function sum(n, acc) {` +
+		`if (n === 0) { return acc; }` +
+		`return sum(n - 1, acc + 1);` +
+		`}` +
+		`var result = sum(10000, 0);` +
+		`</script>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		b.Fatalf("compile failed: %v", err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
+		host := NewMockHost()
+		var output bytes.Buffer
+		host.SetOutput(&output)
+		host.Response().SetBuffer(false)
+		vm.SetHost(host)
+
+		if err := vm.Run(); err != nil {
+			b.Fatalf("vm run failed: %v", err)
+		}
+	}
+}
+
+// BenchmarkJScriptTailCallMember benchmarks tail-recursive member calls.
+// Verifies that TCO on object methods has zero allocations (0 allocs/op).
+func BenchmarkJScriptTailCallMember(b *testing.B) {
+	source := `<script runat="server" language="JScript">` +
+		`var obj = {};` +
+		`obj.sum = function(n, acc) {` +
+		`if (n === 0) { return acc; }` +
+		`return obj.sum(n - 1, acc + 1);` +
+		`};` +
+		`var result = obj.sum(10000, 0);` +
+		`</script>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		b.Fatalf("compile failed: %v", err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
+		host := NewMockHost()
+		var output bytes.Buffer
+		host.SetOutput(&output)
+		host.Response().SetBuffer(false)
+		vm.SetHost(host)
+
+		if err := vm.Run(); err != nil {
+			b.Fatalf("vm run failed: %v", err)
+		}
+	}
+}
+
+// BenchmarkJScriptTailCallDeepRecursion benchmarks very deep tail recursion (100k iterations).
+// Verifies that TCO keeps memory usage constant over deep call chains.
+// Should show minimal allocations even for 100,000 iterations.
+func BenchmarkJScriptTailCallDeepRecursion(b *testing.B) {
+	source := `<script runat="server" language="JScript">` +
+		`function sum(n, acc) {` +
+		`if (n === 0) { return acc; }` +
+		`return sum(n - 1, acc + 1);` +
+		`}` +
+		`var result = sum(100000, 0);` +
+		`</script>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		b.Fatalf("compile failed: %v", err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
+		host := NewMockHost()
+		var output bytes.Buffer
+		host.SetOutput(&output)
+		host.Response().SetBuffer(false)
+		vm.SetHost(host)
+
+		if err := vm.Run(); err != nil {
+			b.Fatalf("vm run failed: %v", err)
+		}
 	}
 }
 

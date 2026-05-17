@@ -3009,7 +3009,8 @@ aspExecLoop:
 				}
 				end := base + localCount - 1
 				if end >= len(vm.stack) {
-					vm.raise(vbscript.StackOverflow, "JScript root local frame exceeds VM stack capacity")
+					vm.jsThrowOutOfStackSpace()
+					break
 				}
 				for i := base; i <= end; i++ {
 					vm.stack[i] = Value{Type: VTJSUndefined}
@@ -3117,6 +3118,9 @@ aspExecLoop:
 				args[i] = vm.pop()
 			}
 			callee := vm.pop()
+			if vm.jsBeginDirectCall(callee, Value{Type: VTJSUndefined}, args) {
+				continue
+			}
 			stackLen := len(vm.jsCallStack)
 			result := vm.jsCall(callee, Value{Type: VTJSUndefined}, args)
 			if len(vm.jsCallStack) == stackLen || result.Type != VTJSUndefined {
@@ -6908,7 +6912,12 @@ func (vm *VM) materializeStaticObjectFromMarker(marker string) Value {
 
 func (vm *VM) push(v Value) {
 	if vm.sp+1 >= StackSize {
+		if len(vm.jsCallStack) > 0 || vm.jsActiveEnvID != 0 || vm.jsRootEnvID != 0 || len(vm.jsTryStack) > 0 || len(vm.jsErrStack) > 0 || vm.engineMode == EngineModeJavaScript {
+			vm.jsThrowOutOfStackSpace()
+			return
+		}
 		vm.raise(vbscript.StackOverflow, "Stack overflow")
+		return
 	}
 	vm.sp++
 	vm.stack[vm.sp] = v

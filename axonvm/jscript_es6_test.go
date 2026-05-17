@@ -1862,6 +1862,9 @@ func TestJScriptCallDepthLimitRaisesOutOfStackSpace(t *testing.T) {
 	if !strings.Contains(err.Error(), "Out of stack space") {
 		t.Fatalf("expected OutOfStackSpace error, got: %v", err)
 	}
+	if !strings.Contains(err.Error(), "JavaScript runtime error") {
+		t.Fatalf("expected JavaScript runtime source, got: %v", err)
+	}
 }
 
 // ---------------------------------------------------------------------------

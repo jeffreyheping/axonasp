@@ -1,9 +1,5 @@
-<%@ language="VBScript" %>
-<script runat="server" language="JScript">
-    // ---------------------------------------------------------------------------
-    // Tail Call Optimization (TCO) Error Prevention Limit Validation
-    // ---------------------------------------------------------------------------
-
+<%@ language="JScript" %>
+<%
     function report(name, actual, expected) {
         Response.Write("Testing " + name + ": ");
         if (String(actual) === String(expected)) {
@@ -45,4 +41,4 @@
     }
 
     Response.Write("\nTCO LIMIT TESTS COMPLETED\n");
-</script>
+%>
