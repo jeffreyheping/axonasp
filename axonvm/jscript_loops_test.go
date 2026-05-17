@@ -630,3 +630,28 @@ func BenchmarkJScriptLetLessZeroInit1M(b *testing.B) {
 	)
 	benchmarkASPExecutionOnly(b, source)
 }
+
+// BenchmarkJScriptTailCallRecursion100K benchmarks deep direct tail recursion.
+func BenchmarkJScriptTailCallRecursion100K(b *testing.B) {
+	source := jscriptSrc(
+		`function sum(n, acc) {` +
+			`if (n === 0) { return acc; }` +
+			`return sum(n - 1, acc + 1);` +
+			`}` +
+			`Response.Write(sum(100000, 0));`,
+	)
+	benchmarkASPExecutionOnly(b, source)
+}
+
+// BenchmarkJScriptTailCallMemberRecursion100K benchmarks deep member tail recursion.
+func BenchmarkJScriptTailCallMemberRecursion100K(b *testing.B) {
+	source := jscriptSrc(
+		`var obj = {};` +
+			`obj.sum = function(n, acc) {` +
+			`if (n === 0) { return acc; }` +
+			`return obj.sum(n - 1, acc + 1);` +
+			`};` +
+			`Response.Write(obj.sum(100000, 0));`,
+	)
+	benchmarkASPExecutionOnly(b, source)
+}

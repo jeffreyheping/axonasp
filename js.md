@@ -47,7 +47,7 @@ This document serves as a high-precision checklist for implementing remaining EC
 ## 🛠️ PHASE 4: UNICODE & FULL PLANE SUPPORT (MEDIUM TO HIGH COMPLEXITY)
 
 **Goal:** Bring JScript into full compliance with the Unicode Standard, moving beyond the Basic Multilingual Plane (BMP).
-
+If necessary use the unistring inside ./jscript/unistring.go, but check if it is suitable for the task before using it. The unistring implementation is designed to handle Unicode strings efficiently, but it may not be necessary for all operations. For basic string manipulation and regular expression support, you may be able to work directly with Go's built-in string type, which is UTF-8 encoded and preferable. Also check the current UTF-8/UTF-16 implementation that we already use for VBScript to see if it is not better.
 ### Tasks:
 
 * SUBPHASE 4.1: Regular Expressions & Strings

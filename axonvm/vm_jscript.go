@@ -50,6 +50,7 @@ import (
 
 const jsMaxStringBytes = 8 * 1024 * 1024
 const jsMaxStringWorkBytes = 2 * 1024 * 1024
+const jsMaxCallStackDepth = 10100
 const jsInternalPropPrefix = "__js_"
 const jsAccessorGetterPrefix = "__js_getter__"
 const jsAccessorSetterPrefix = "__js_setter__"
@@ -2867,6 +2868,10 @@ func (vm *VM) jsBeginFunctionCall(fn Value, thisVal Value, args []Value, ctorObj
 	if closure.isArrow {
 		thisVal = closure.capturedThis
 	}
+	if len(vm.jsCallStack) >= jsMaxCallStackDepth {
+		vm.jsThrowJSError(jscript.OutOfStackSpace)
+		return false
+	}
 	frame := jsCallFrame{
 		returnIP:     vm.ip,
 		envID:        vm.jsActiveEnvID,
@@ -4345,6 +4350,18 @@ func (vm *VM) jsMemberGet(target Value, member string) (Value, bool) {
 	default:
 		return Value{Type: VTJSUndefined}, false
 	}
+}
+
+// jsPrepareMemberCallee resolves one member access into a callable callee and its receiver.
+func (vm *VM) jsPrepareMemberCallee(target Value, member string) (Value, Value, bool, bool) {
+	callee, deferred := vm.jsMemberGet(target, member)
+	if deferred {
+		return Value{Type: VTJSUndefined}, Value{Type: VTJSUndefined}, false, true
+	}
+	if !vm.jsIsCallable(callee) {
+		return Value{Type: VTJSUndefined}, Value{Type: VTJSUndefined}, false, false
+	}
+	return callee, target, true, false
 }
 
 func (vm *VM) jsCallMember(target Value, member string, args []Value) (Value, bool) {
@@ -8158,6 +8175,10 @@ func (vm *VM) jsCall(callee Value, thisVal Value, args []Value) Value {
 					callArgs = merged
 				}
 				return vm.jsCall(closure.boundFn, closure.boundThis, callArgs)
+			}
+			if len(vm.jsCallStack) >= jsMaxCallStackDepth {
+				vm.jsThrowJSError(jscript.OutOfStackSpace)
+				return Value{Type: VTJSUndefined}
 			}
 			child := vm.cloneForExecuteLocal(len(vm.bytecode))
 			if child.jsBeginFunctionCall(callee, thisVal, args, Value{Type: VTJSUndefined}, false, Value{Type: VTJSUndefined}, false) {

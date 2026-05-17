@@ -444,6 +444,60 @@ func TestJScriptTailCallNotEmittedInsideTryCatch(t *testing.T) {
 	}
 }
 
+func TestJScriptTailCallMemberOpcodeEmission(t *testing.T) {
+	source := `<script runat="server" language="JScript">` +
+		`var obj = {};` +
+		`obj.sum = function(n, acc) {` +
+		`if (n === 0) { return acc; }` +
+		`return obj.sum(n - 1, acc + 1);` +
+		`};` +
+		`Response.Write(obj.sum(10, 0));` +
+		`</script>`
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	bytecode := compiler.Bytecode()
+	hasTailMemberCall := false
+	for i := 0; i < len(bytecode); i++ {
+		if OpCode(bytecode[i]) == OpJSTailCallMember {
+			hasTailMemberCall = true
+			break
+		}
+	}
+	if !hasTailMemberCall {
+		t.Fatalf("expected OpJSTailCallMember in bytecode, got %v", bytecode)
+	}
+}
+
+func TestJScriptTailCallComputedMemberOpcodeEmission(t *testing.T) {
+	source := `<script runat="server" language="JScript">` +
+		`var obj = {};` +
+		`obj.sum = function(n, acc) {` +
+		`if (n === 0) { return acc; }` +
+		`return obj["sum"](n - 1, acc + 1);` +
+		`};` +
+		`Response.Write(obj.sum(10, 0));` +
+		`</script>`
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	bytecode := compiler.Bytecode()
+	hasTailComputedMemberCall := false
+	for i := 0; i < len(bytecode); i++ {
+		if OpCode(bytecode[i]) == OpJSTailCallComputedMember {
+			hasTailComputedMemberCall = true
+			break
+		}
+	}
+	if !hasTailComputedMemberCall {
+		t.Fatalf("expected OpJSTailCallComputedMember in bytecode, got %v", bytecode)
+	}
+}
+
 func TestJScriptTailCallKeepsEnvGrowthBounded(t *testing.T) {
 	source := `<script runat="server" language="JScript">` +
 		`function sum(n, acc) {` +
@@ -480,6 +534,86 @@ func TestJScriptTailCallKeepsEnvGrowthBounded(t *testing.T) {
 	}
 	if len(vm.jsArgumentsItems)-baseArgsCount > 64 {
 		t.Fatalf("tail call arguments growth too high: base=%d current=%d", baseArgsCount, len(vm.jsArgumentsItems))
+	}
+}
+
+func TestJScriptTailCallMemberKeepsEnvGrowthBounded(t *testing.T) {
+	source := `<script runat="server" language="JScript">` +
+		`var obj = {};` +
+		`obj.sum = function(n, acc) {` +
+		`if (n === 0) { return acc; }` +
+		`return obj.sum(n - 1, acc + 1);` +
+		`};` +
+		`Response.Write(obj.sum(100000, 0));` +
+		`</script>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	host.Response().SetBuffer(false)
+	vm.SetHost(host)
+
+	baseEnvCount := len(vm.jsEnvItems)
+	baseArgsCount := len(vm.jsArgumentsItems)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	if output.String() != "100000" {
+		t.Fatalf("expected 100000, got %q", output.String())
+	}
+
+	if len(vm.jsEnvItems)-baseEnvCount > 64 {
+		t.Fatalf("tail member call env growth too high: base=%d current=%d", baseEnvCount, len(vm.jsEnvItems))
+	}
+	if len(vm.jsArgumentsItems)-baseArgsCount > 64 {
+		t.Fatalf("tail member call arguments growth too high: base=%d current=%d", baseArgsCount, len(vm.jsArgumentsItems))
+	}
+}
+
+func TestJScriptTailCallComputedMemberKeepsEnvGrowthBounded(t *testing.T) {
+	source := `<script runat="server" language="JScript">` +
+		`var obj = {};` +
+		`obj.sum = function(n, acc) {` +
+		`if (n === 0) { return acc; }` +
+		`return obj["sum"](n - 1, acc + 1);` +
+		`};` +
+		`Response.Write(obj.sum(100000, 0));` +
+		`</script>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	host.Response().SetBuffer(false)
+	vm.SetHost(host)
+
+	baseEnvCount := len(vm.jsEnvItems)
+	baseArgsCount := len(vm.jsArgumentsItems)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	if output.String() != "100000" {
+		t.Fatalf("expected 100000, got %q", output.String())
+	}
+
+	if len(vm.jsEnvItems)-baseEnvCount > 64 {
+		t.Fatalf("tail computed member call env growth too high: base=%d current=%d", baseEnvCount, len(vm.jsEnvItems))
+	}
+	if len(vm.jsArgumentsItems)-baseArgsCount > 64 {
+		t.Fatalf("tail computed member call arguments growth too high: base=%d current=%d", baseArgsCount, len(vm.jsArgumentsItems))
 	}
 }
 

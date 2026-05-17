@@ -3186,7 +3186,14 @@ aspExecLoop:
 			}
 			target := vm.pop()
 			member := vm.constants[nameIdx].Str
-			if result, handled := vm.jsCallMember(target, member, args); handled {
+			if callee, thisVal, ok, deferred := vm.jsPrepareMemberCallee(target, member); deferred {
+				vm.jsReturn(Value{Type: VTJSUndefined})
+			} else if ok {
+				if vm.jsTailCallValue(callee, thisVal, args) {
+					continue
+				}
+				vm.jsReturn(vm.jsCall(callee, thisVal, args))
+			} else if result, handled := vm.jsCallMember(target, member, args); handled {
 				vm.jsReturn(result)
 			} else {
 				vm.jsReturn(Value{Type: VTJSUndefined})
@@ -3202,7 +3209,14 @@ aspExecLoop:
 			keyVal := vm.pop()
 			target := vm.pop()
 			key := vm.jsPropertyKeyFromValue(keyVal)
-			if result, handled := vm.jsCallMember(target, key, args); handled {
+			if callee, thisVal, ok, deferred := vm.jsPrepareMemberCallee(target, key); deferred {
+				vm.jsReturn(Value{Type: VTJSUndefined})
+			} else if ok {
+				if vm.jsTailCallValue(callee, thisVal, args) {
+					continue
+				}
+				vm.jsReturn(vm.jsCall(callee, thisVal, args))
+			} else if result, handled := vm.jsCallMember(target, key, args); handled {
 				vm.jsReturn(result)
 			} else {
 				vm.jsReturn(Value{Type: VTJSUndefined})
