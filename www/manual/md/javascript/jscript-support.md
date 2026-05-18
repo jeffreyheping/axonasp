@@ -1,7 +1,7 @@
 # Use JavaScript (JScript) in AxonASP Pages
 
 ## Overview
-AxonASP provides a high-performance JavaScript (JScript) execution engine that allows you to write server-side logic using full ECMAScript 5 (ES5) standards for JScript compatibility and also ECMAScript 6 (ES6) and onward features for new code. This page covers how to enable JavaScript (JScript), use ASP intrinsic objects, and leverage modern JavaScript features within your ASP applications.
+AxonASP provides a high-performance JavaScript (JScript) execution engine that allows you to write server-side logic using full ECMAScript 5 (ES5) standards for JScript compatibility and also ECMAScript 6 (ES6) and onward for new code. This page covers how to use JavaScript (JScript), use ASP intrinsic objects, and leverage modern JavaScript features within your ASP applications.
 
 ### Why use JavaScript (JScript) in ASP?
 - **Familiar Syntax**: Many developers are more familiar with JavaScript than VBScript, making it easier to write complex logic. This allows the user to write full HTML pages, and services using javascript only, with the full support of the AxonASP framework, and in a way that is easier and more memory efficient than using systems like NodeJS.
@@ -42,7 +42,7 @@ The JavaScript (JScript) engine returns standard JavaScript values (String, Numb
 - **undefined** and **null** map to **Empty** in the VM context.
 
 ## Remarks
-- **ECMAScript 5/6 Support**: AxonASP's JavaScript (JScript) engine supports all ES5 features, including JSON support (`JSON.parse`, `JSON.stringify`), and standard Array methods (`map`, `filter`, `reduce`). Most features from ES 6 and later are also supported, but refer to the documentation for specific details.
+- **ECMAScript 5/6 Support**: AxonASP's JavaScript (JScript) engine supports all ES5 features and most ES6 features, including JSON support (`JSON.parse`, `JSON.stringify`), and standard Array methods (`map`, `filter`, `reduce`). Most features from later versions are also supported,  refer to the documentation for specific details.
 - **Case Sensitivity**: Unlike VBScript, JavaScript (JScript) is strictly case-sensitive. You must use `Response.Write`, not `response.write`.
 - **Engine Architecture**: JavaScript (JScript) execution in AxonASP utilizes a sophisticated Abstract Syntax Tree (AST) parser and interpreter, providing optimized performance for complex logic.
 - **Global Console**: The engine includes a built-in **console** object (`console.log`, `console.warn`, `console.error`) for server-side debugging and diagnostics. Output is directed to the system console or log files depending on your `axonasp.toml` configuration.

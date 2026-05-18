@@ -22,8 +22,9 @@ var { proxy, revoke } = Proxy.revocable(target, handler);
 - The `Proxy` object allows you to create a proxy for another object, which can intercept and redefine fundamental operations for that object.
 - **Supported traps:** `get`, `set`, `has`, `deleteProperty`, `apply`, `construct`, `ownKeys`, `defineProperty`, `getOwnPropertyDescriptor`, `getPrototypeOf`, `setPrototypeOf`, `isExtensible`, and `preventExtensions`.
 - **Revocable Proxies:** `Proxy.revocable` returns an object with a `proxy` and a `revoke` function. Once revoked, any operation on the proxy throws a `TypeError`.
-- **Invariant Enforcement (Phase 5):** The engine strictly validates every ECMAScript §10.5 trap invariant. A broken trap throws a `TypeError` with an `"invariant"` description. Key rules enforced:
-  - **get:** A non-configurable, non-writable data property must return the exact stored value. A non-configurable accessor with no getter must return `undefined`.
+- **Centralized Trap Validator:** trap invariant checks are centralized in the runtime validator module to ensure consistent TypeError behavior across `Proxy` and `Reflect` paths.
+- **Invariant Enforcement:** The engine strictly validates every ECMAScript §10.5 trap invariant. A broken trap throws a `TypeError` with an `"invariant"` description. Key rules enforced:
+    - **get:** A non-configurable, non-writable data property must return the exact stored value. A non-configurable accessor with no getter must return `undefined`.
   - **has:** Cannot return `false` for a non-configurable own property, or for any own property of a non-extensible target.
   - **set:** Cannot return `true` when the target has a non-configurable, non-writable data property and the new value differs from the stored one.
   - **deleteProperty:** Cannot return `true` for a non-configurable own property.

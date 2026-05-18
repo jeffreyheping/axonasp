@@ -12,6 +12,10 @@ import (
 	"strconv"
 )
 
+func jsBuiltinMethodDescriptor(v Value) jsPropertyDescriptor {
+	return jsPropertyDescriptor{Value: v, HasValue: true, Enumerable: false, Configurable: true, Writable: true}
+}
+
 // jsArrayIterator represents the state of an array iterator.
 type jsArrayIterator struct {
 	target Value
@@ -149,9 +153,9 @@ func (vm *VM) jsPopulatePrototypes(bindings map[string]Value) {
 			valuesFn := vm.jsCreateNativeFunction("values", "ArrayValues")
 			keysFn := vm.jsCreateNativeFunction("keys", "ArrayKeys")
 			entriesFn := vm.jsCreateNativeFunction("entries", "ArrayEntries")
-			vm.jsSetDescriptor(proto.Num, "keys", jsDefaultPropertyDescriptor(keysFn))
-			vm.jsSetDescriptor(proto.Num, "entries", jsDefaultPropertyDescriptor(entriesFn))
-			vm.jsSetDescriptor(proto.Num, "values", jsDefaultPropertyDescriptor(valuesFn))
+			vm.jsSetDescriptor(proto.Num, "keys", jsBuiltinMethodDescriptor(keysFn))
+			vm.jsSetDescriptor(proto.Num, "entries", jsBuiltinMethodDescriptor(entriesFn))
+			vm.jsSetDescriptor(proto.Num, "values", jsBuiltinMethodDescriptor(valuesFn))
 
 			itKey := jsSymbolPropertyPrefix + strconv.FormatInt(jsWellKnownSymbolIterator, 10)
 			vm.jsSetDescriptor(proto.Num, itKey, jsPropertyDescriptor{
@@ -196,7 +200,7 @@ func (vm *VM) jsPopulatePrototypes(bindings map[string]Value) {
 				Configurable: true,
 				Writable:     true,
 			})
-			vm.jsSetDescriptor(proto.Num, "matchAll", jsDefaultPropertyDescriptor(vm.jsCreateNativeFunction("matchAll", "StringPrototypeMatchAll")))
+			vm.jsSetDescriptor(proto.Num, "matchAll", jsBuiltinMethodDescriptor(vm.jsCreateNativeFunction("matchAll", "StringPrototypeMatchAll")))
 		}
 	}
 
@@ -219,7 +223,7 @@ func (vm *VM) jsPopulatePrototypes(bindings map[string]Value) {
 	if objectCtor, ok := bindings["Object"]; ok {
 		if proto, deferred := vm.jsMemberGet(objectCtor, "prototype"); !deferred && proto.Type == VTJSObject {
 			for _, name := range []string{"hasOwnProperty", "propertyIsEnumerable", "isPrototypeOf", "toString", "toLocaleString", "valueOf"} {
-				vm.jsSetDescriptor(proto.Num, name, jsDefaultPropertyDescriptor(vm.jsCreateNativeFunction(name, "ObjectPrototype")))
+				vm.jsSetDescriptor(proto.Num, name, jsBuiltinMethodDescriptor(vm.jsCreateNativeFunction(name, "ObjectPrototype")))
 			}
 		}
 	}
@@ -228,7 +232,7 @@ func (vm *VM) jsPopulatePrototypes(bindings map[string]Value) {
 	if wsCtor, ok := bindings["WeakSet"]; ok {
 		if proto, deferred := vm.jsMemberGet(wsCtor, "prototype"); !deferred && proto.Type == VTJSObject {
 			for _, name := range []string{"add", "has", "delete"} {
-				vm.jsSetDescriptor(proto.Num, name, jsDefaultPropertyDescriptor(vm.jsCreateNativeFunction(name, "WeakSet")))
+				vm.jsSetDescriptor(proto.Num, name, jsBuiltinMethodDescriptor(vm.jsCreateNativeFunction(name, "WeakSet")))
 			}
 		}
 	}
@@ -236,7 +240,7 @@ func (vm *VM) jsPopulatePrototypes(bindings map[string]Value) {
 	// WeakRef.prototype
 	if wrCtor, ok := bindings["WeakRef"]; ok {
 		if proto, deferred := vm.jsMemberGet(wrCtor, "prototype"); !deferred && proto.Type == VTJSObject {
-			vm.jsSetDescriptor(proto.Num, "deref", jsDefaultPropertyDescriptor(vm.jsCreateNativeFunction("deref", "WeakRef")))
+			vm.jsSetDescriptor(proto.Num, "deref", jsBuiltinMethodDescriptor(vm.jsCreateNativeFunction("deref", "WeakRef")))
 		}
 	}
 
@@ -244,7 +248,7 @@ func (vm *VM) jsPopulatePrototypes(bindings map[string]Value) {
 	if frCtor, ok := bindings["FinalizationRegistry"]; ok {
 		if proto, deferred := vm.jsMemberGet(frCtor, "prototype"); !deferred && proto.Type == VTJSObject {
 			for _, name := range []string{"register", "unregister"} {
-				vm.jsSetDescriptor(proto.Num, name, jsDefaultPropertyDescriptor(vm.jsCreateNativeFunction(name, "FinalizationRegistry")))
+				vm.jsSetDescriptor(proto.Num, name, jsBuiltinMethodDescriptor(vm.jsCreateNativeFunction(name, "FinalizationRegistry")))
 			}
 		}
 	}
@@ -253,7 +257,7 @@ func (vm *VM) jsPopulatePrototypes(bindings map[string]Value) {
 	if mapCtor, ok := bindings["Map"]; ok {
 		if proto, deferred := vm.jsMemberGet(mapCtor, "prototype"); !deferred && proto.Type == VTJSObject {
 			for _, name := range []string{"set", "get", "has", "delete", "clear"} {
-				vm.jsSetDescriptor(proto.Num, name, jsDefaultPropertyDescriptor(vm.jsCreateNativeFunction(name, "Map")))
+				vm.jsSetDescriptor(proto.Num, name, jsBuiltinMethodDescriptor(vm.jsCreateNativeFunction(name, "Map")))
 			}
 		}
 	}
@@ -262,7 +266,7 @@ func (vm *VM) jsPopulatePrototypes(bindings map[string]Value) {
 	if setCtor, ok := bindings["Set"]; ok {
 		if proto, deferred := vm.jsMemberGet(setCtor, "prototype"); !deferred && proto.Type == VTJSObject {
 			for _, name := range []string{"add", "has", "delete", "clear"} {
-				vm.jsSetDescriptor(proto.Num, name, jsDefaultPropertyDescriptor(vm.jsCreateNativeFunction(name, "Set")))
+				vm.jsSetDescriptor(proto.Num, name, jsBuiltinMethodDescriptor(vm.jsCreateNativeFunction(name, "Set")))
 			}
 		}
 	}
@@ -270,19 +274,19 @@ func (vm *VM) jsPopulatePrototypes(bindings map[string]Value) {
 	// WeakMap.prototype
 	if weakMapCtor, ok := bindings["WeakMap"]; ok {
 		if proto, deferred := vm.jsMemberGet(weakMapCtor, "prototype"); !deferred && proto.Type == VTJSObject {
-			vm.jsSetDescriptor(proto.Num, "get", jsDefaultPropertyDescriptor(vm.jsCreateNativeFunction("get", "WeakMap")))
-			vm.jsSetDescriptor(proto.Num, "set", jsDefaultPropertyDescriptor(vm.jsCreateNativeFunction("set", "WeakMap")))
-			vm.jsSetDescriptor(proto.Num, "has", jsDefaultPropertyDescriptor(vm.jsCreateNativeFunction("has", "WeakMap")))
-			vm.jsSetDescriptor(proto.Num, "delete", jsDefaultPropertyDescriptor(vm.jsCreateNativeFunction("delete", "WeakMap")))
+			vm.jsSetDescriptor(proto.Num, "get", jsBuiltinMethodDescriptor(vm.jsCreateNativeFunction("get", "WeakMap")))
+			vm.jsSetDescriptor(proto.Num, "set", jsBuiltinMethodDescriptor(vm.jsCreateNativeFunction("set", "WeakMap")))
+			vm.jsSetDescriptor(proto.Num, "has", jsBuiltinMethodDescriptor(vm.jsCreateNativeFunction("has", "WeakMap")))
+			vm.jsSetDescriptor(proto.Num, "delete", jsBuiltinMethodDescriptor(vm.jsCreateNativeFunction("delete", "WeakMap")))
 		}
 	}
 
 	// WeakSet.prototype
 	if weakSetCtor, ok := bindings["WeakSet"]; ok {
 		if proto, deferred := vm.jsMemberGet(weakSetCtor, "prototype"); !deferred && proto.Type == VTJSObject {
-			vm.jsSetDescriptor(proto.Num, "add", jsDefaultPropertyDescriptor(vm.jsCreateNativeFunction("add", "WeakSet")))
-			vm.jsSetDescriptor(proto.Num, "has", jsDefaultPropertyDescriptor(vm.jsCreateNativeFunction("has", "WeakSet")))
-			vm.jsSetDescriptor(proto.Num, "delete", jsDefaultPropertyDescriptor(vm.jsCreateNativeFunction("delete", "WeakSet")))
+			vm.jsSetDescriptor(proto.Num, "add", jsBuiltinMethodDescriptor(vm.jsCreateNativeFunction("add", "WeakSet")))
+			vm.jsSetDescriptor(proto.Num, "has", jsBuiltinMethodDescriptor(vm.jsCreateNativeFunction("has", "WeakSet")))
+			vm.jsSetDescriptor(proto.Num, "delete", jsBuiltinMethodDescriptor(vm.jsCreateNativeFunction("delete", "WeakSet")))
 		}
 	}
 }

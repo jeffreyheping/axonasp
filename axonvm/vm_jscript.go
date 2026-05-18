@@ -2805,6 +2805,9 @@ func (vm *VM) jsIsConcatSpreadable(v Value) bool {
 		return true
 	}
 	if v.Type == VTJSObject {
+		if _, ok := vm.jsObjectItems[v.Num]["__js_vbarray_source"]; ok {
+			return true
+		}
 		return vm.jsObjectStringProperty(v, "__js_type") == "Array"
 	}
 	return false
@@ -4079,18 +4082,20 @@ func (vm *VM) jsProxyGet(proxy Value, member string, receiver Value) (Value, boo
 
 	// 4. Invariant check (§10.5.8 step 7)
 	if pObj.Target.Type == VTJSObject || pObj.Target.Type == VTJSFunction {
-		if targetDesc, hasDesc := vm.jsGetDescriptor(pObj.Target.Num, member); hasDesc && !targetDesc.Configurable {
-			if jsDescriptorIsData(targetDesc) && !targetDesc.Writable {
-				// Must return the exact same value
-				if !vm.jsStrictEquals(result, targetDesc.Value) {
-					vm.jsThrowJSError(jscript.ProxyGetTrapInvariantViolation)
-					return Value{Type: VTJSUndefined}, false
-				}
-			} else if (targetDesc.HasGetter || targetDesc.HasSetter) && !targetDesc.HasGetter {
-				// Accessor with no getter — result must be undefined
-				if result.Type != VTJSUndefined {
-					vm.jsThrowJSError(jscript.ProxyGetTrapInvariantViolation)
-					return Value{Type: VTJSUndefined}, false
+		if targetDesc, hasDesc := vm.jsGetDescriptor(pObj.Target.Num, member); hasDesc {
+			if !targetDesc.Configurable {
+				if jsDescriptorIsData(targetDesc) && !targetDesc.Writable {
+					// Must return the exact same value.
+					if !vm.jsStrictEquals(result, targetDesc.Value) {
+						vm.jsThrowJSError(jscript.ProxyGetTrapInvariantViolation)
+						return Value{Type: VTJSUndefined}, false
+					}
+				} else if (targetDesc.HasGetter || targetDesc.HasSetter) && !targetDesc.HasGetter {
+					// Accessor with no getter — result must be undefined.
+					if result.Type != VTJSUndefined {
+						vm.jsThrowJSError(jscript.ProxyGetTrapInvariantViolation)
+						return Value{Type: VTJSUndefined}, false
+					}
 				}
 			}
 		}
@@ -4167,19 +4172,12 @@ func (vm *VM) jsProxyHas(proxy Value, member string) bool {
 	trapResult := vm.jsTruthy(result)
 
 	// Invariant check (§10.5.7 step 8): trap returned false
-	if !trapResult {
-		if pObj.Target.Type == VTJSObject || pObj.Target.Type == VTJSFunction {
-			if targetDesc, hasDesc := vm.jsGetDescriptor(pObj.Target.Num, member); hasDesc {
-				// Non-configurable own property cannot be reported as absent
-				if !targetDesc.Configurable {
-					vm.jsThrowJSError(jscript.ProxyHasTrapInvariantViolation)
-					return false
-				}
-				// Non-extensible target with existing own property cannot be reported as absent
-				if !vm.jsObjectIsExtensible(pObj.Target) {
-					vm.jsThrowJSError(jscript.ProxyHasTrapInvariantViolation)
-					return false
-				}
+	if pObj.Target.Type == VTJSObject || pObj.Target.Type == VTJSFunction {
+		targetExtensible := vm.jsObjectIsExtensible(pObj.Target)
+		if targetDesc, hasDesc := vm.jsGetDescriptor(pObj.Target.Num, member); hasDesc {
+			if code, violated := jscript.ValidateProxyHasMissingPropertyInvariant(hasDesc, targetDesc.Configurable, targetExtensible, trapResult); violated {
+				vm.jsThrowJSError(code)
+				return false
 			}
 		}
 	}
@@ -4462,10 +4460,11 @@ func (vm *VM) jsProxyGetPrototypeOf(proxy Value) Value {
 	}
 	// Invariant check (§10.5.1 step 8): if target is non-extensible the returned
 	// prototype must be identical to the target's actual prototype.
-	if !vm.jsObjectIsExtensible(pObj.Target) {
+	targetExtensible := vm.jsObjectIsExtensible(pObj.Target)
+	if !targetExtensible {
 		targetProto := vm.jsGetPrototypeValue(pObj.Target)
-		if !vm.jsStrictEquals(result, targetProto) {
-			vm.jsThrowJSError(jscript.ProxyGetPrototypeOfTrapInvariantViolation)
+		if code, violated := jscript.ValidateProxyGetPrototypeOfInvariant(targetExtensible, vm.jsStrictEquals(result, targetProto)); violated {
+			vm.jsThrowJSError(code)
 			return Value{Type: VTJSUndefined}
 		}
 	}
@@ -5897,7 +5896,9 @@ func (vm *VM) jsCallMember(target Value, member string, args []Value) (Value, bo
 				if vm.jsIsConcatSpreadable(arg) {
 					// Extract values from array or array-like
 					var values []Value
-					if arg.Type == VTArray && arg.Arr != nil {
+					if arrLike, ok := vm.jsAsConcatArray(arg); ok && arrLike.Arr != nil {
+						values = arrLike.Arr.Values
+					} else if arg.Type == VTArray && arg.Arr != nil {
 						values = arg.Arr.Values
 					} else {
 						// It could be a bridge object or a JS object marked as spreadable
@@ -6734,7 +6735,7 @@ func (vm *VM) jsCallMember(target Value, member string, args []Value) (Value, bo
 				}
 				// Use ReflectDefineProperty logic
 				success := vm.dispatchJSIntrinsicCall(Value{}, "ReflectDefineProperty", args)
-				if !vm.asBool(success) {
+				if !vm.asBool(success) && args[0].Type == VTJSProxy {
 					vm.jsThrowTypeError("Object.defineProperty failed")
 				}
 				return args[0], true

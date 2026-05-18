@@ -93,7 +93,7 @@ func TestAcquireVMFromCachedProgramResetsState(t *testing.T) {
 // TestAcquireVMFromCachedProgramResetsJScriptState verifies pooled VM reuse clears
 // JScript runtime state that can otherwise trigger stack underflow on expression pop.
 func TestAcquireVMFromCachedProgramResetsJScriptState(t *testing.T) {
-	compiler := NewASPCompiler(`<script runat="server" language="JScript">foo();</script>`)
+	compiler := NewASPCompiler(`<script runat="server" language="JScript">(1 + 2);</script>`)
 	if err := compiler.Compile(); err != nil {
 		t.Fatalf("compile failed: %v", err)
 	}
