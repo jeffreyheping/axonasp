@@ -260,31 +260,58 @@ func (vm *VM) jsRequire(args []Value) Value {
 // jsCreateFSObject allocates the Node.js-compatible fs module object.
 func (vm *VM) jsCreateFSObject() Value {
 	objID := vm.allocJSID()
-	obj := make(map[string]Value, 8)
+	obj := make(map[string]Value, 14)
 	obj["__js_type"] = NewString("fs")
+
+	createMethod := func(name string, ctorName string) Value {
+		return vm.jsCreateIntrinsicFunction("fs."+name, ctorName)
+	}
+
+	obj["readFile"] = createMethod("readFile", "FSReadFile")
+	obj["readFileSync"] = createMethod("readFileSync", "FSReadFileSync")
+	obj["writeFileSync"] = createMethod("writeFileSync", "FSWriteFileSync")
+	obj["existsSync"] = createMethod("existsSync", "FSExistsSync")
+	obj["statSync"] = createMethod("statSync", "FSStatSync")
 	obj["promises"] = vm.jsCreateFSPromisesObject()
+
 	vm.jsObjectItems[objID] = obj
-	vm.jsPropertyItems[objID] = make(map[string]jsPropertyDescriptor, 8)
+	vm.jsPropertyItems[objID] = make(map[string]jsPropertyDescriptor, 14)
 	return Value{Type: VTJSObject, Num: objID}
 }
 
 // jsCreateFSPromisesObject allocates the Node.js-compatible fs.promises object.
 func (vm *VM) jsCreateFSPromisesObject() Value {
 	objID := vm.allocJSID()
-	obj := make(map[string]Value, 6)
+	obj := make(map[string]Value, 8)
 	obj["__js_type"] = NewString("fs.promises")
+
+	createMethod := func(name string, ctorName string) Value {
+		return vm.jsCreateIntrinsicFunction("fs.promises."+name, ctorName)
+	}
+
+	obj["readFile"] = createMethod("readFile", "FSPromisesReadFile")
+
 	vm.jsObjectItems[objID] = obj
-	vm.jsPropertyItems[objID] = make(map[string]jsPropertyDescriptor, 6)
+	vm.jsPropertyItems[objID] = make(map[string]jsPropertyDescriptor, 8)
 	return Value{Type: VTJSObject, Num: objID}
 }
 
 // jsCreateCryptoObject allocates the Node.js-compatible crypto module object.
 func (vm *VM) jsCreateCryptoObject() Value {
 	objID := vm.allocJSID()
-	obj := make(map[string]Value, 8)
+	obj := make(map[string]Value, 10)
 	obj["__js_type"] = NewString("crypto")
+
+	createMethod := func(name string, ctorName string) Value {
+		return vm.jsCreateIntrinsicFunction("crypto."+name, ctorName)
+	}
+
+	obj["createHash"] = createMethod("createHash", "CryptoCreateHash")
+	obj["createHmac"] = createMethod("createHmac", "CryptoCreateHmac")
+	obj["randomBytes"] = createMethod("randomBytes", "CryptoRandomBytes")
+
 	vm.jsObjectItems[objID] = obj
-	vm.jsPropertyItems[objID] = make(map[string]jsPropertyDescriptor, 8)
+	vm.jsPropertyItems[objID] = make(map[string]jsPropertyDescriptor, 10)
 	return Value{Type: VTJSObject, Num: objID}
 }
 

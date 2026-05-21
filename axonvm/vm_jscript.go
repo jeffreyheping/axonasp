@@ -8988,6 +8988,36 @@ func (vm *VM) dispatchJSIntrinsicCall(thisVal Value, ctorName string, args []Val
 	case "PathNormalize":
 		res, _ := vm.jsCallPathMethod("normalize", args)
 		return res
+	// fs module methods
+	case "FSReadFile":
+		res, _ := vm.jsCallFSMethod("readFile", args)
+		return res
+	case "FSReadFileSync":
+		res, _ := vm.jsCallFSMethod("readFileSync", args)
+		return res
+	case "FSWriteFileSync":
+		res, _ := vm.jsCallFSMethod("writeFileSync", args)
+		return res
+	case "FSExistsSync":
+		res, _ := vm.jsCallFSMethod("existsSync", args)
+		return res
+	case "FSStatSync":
+		res, _ := vm.jsCallFSMethod("statSync", args)
+		return res
+	// fs.promises module methods
+	case "FSPromisesReadFile":
+		res, _ := vm.jsCallFSPromisesMethod("readFile", args)
+		return res
+	// crypto module methods
+	case "CryptoCreateHash":
+		res, _ := vm.jsCallCryptoMethod("createHash", args)
+		return res
+	case "CryptoCreateHmac":
+		res, _ := vm.jsCallCryptoMethod("createHmac", args)
+		return res
+	case "CryptoRandomBytes":
+		res, _ := vm.jsCallCryptoMethod("randomBytes", args)
+		return res
 	case "HTTPCreateServer":
 		res, _ := vm.jsCallHTTPMethod("http", "createServer", args)
 		return res
@@ -9159,6 +9189,9 @@ func (vm *VM) jsCall(callee Value, thisVal Value, args []Value) Value {
 			"ProcessCwd", "ProcessExit", "ProcessNextTick",
 			"OSHostname", "OSType", "OSPlatform", "OSArch", "OSRelease", "OSUptime", "OSFreemem", "OSTotalmem", "OSCpus",
 			"PathJoin", "PathResolve", "PathBasename", "PathDirname", "PathExtname", "PathNormalize",
+			"FSReadFile", "FSReadFileSync", "FSWriteFileSync", "FSExistsSync", "FSStatSync",
+			"FSPromisesReadFile",
+			"CryptoCreateHash", "CryptoCreateHmac", "CryptoRandomBytes",
 			"HTTPCreateServer", "HTTPRequest", "HTTPGet", "HTTPServerListen",
 			"QSParse", "QSStringify", "QSEscape", "QSUnescape",
 			"SetTimeout", "ClearTimeout", "SetInterval", "ClearInterval", "SetImmediate", "ClearImmediate",
