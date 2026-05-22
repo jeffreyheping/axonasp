@@ -3,7 +3,7 @@ module g3pix.com.br/axonasp
 go 1.26.2
 
 require (
-	codeberg.org/go-pdf/fpdf v0.11.1
+	codeberg.org/go-pdf/fpdf v0.12.0
 	github.com/blugelabs/bluge v0.2.2
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/denisenkom/go-mssqldb v0.12.3
@@ -26,14 +26,13 @@ require (
 	github.com/mark3labs/mcp-go v0.54.0
 	github.com/ricochet2200/go-disk-usage/du v0.0.0-20210707232629-ac9918953285
 	github.com/rivo/tview v0.42.0
-	github.com/sahilm/fuzzy v0.1.2
 	github.com/sijms/go-ora/v2 v2.9.0
 	github.com/spf13/viper v1.21.0
 	github.com/yuin/goldmark v1.8.2
-	golang.org/x/crypto v0.51.0
-	golang.org/x/image v0.40.0
+	golang.org/x/crypto v0.52.0
+	golang.org/x/image v0.41.0
 	golang.org/x/net v0.54.0
-	golang.org/x/sys v0.44.0
+	golang.org/x/sys v0.45.0
 	golang.org/x/text v0.37.0
 	gopkg.in/gomail.v2 v2.0.0-20160411212932-81ebce5c23df
 	modernc.org/sqlite v1.50.1

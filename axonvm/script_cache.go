@@ -106,6 +106,10 @@ type CachedProgram struct {
 	GlobalNames         []string
 	DeclaredGlobalNames []string
 	ConstGlobalNames    []string
+	// GlobalTypeNames stores VB6 As Type declarations for global variables.
+	// Each entry is "name:type" where type is the ValueType constant as an integer.
+	// This is populated from the compiler's globalVarTypes during cache creation.
+	GlobalTypeNames     []string
 	IncludeDependencies []string
 }
 
@@ -1648,6 +1652,7 @@ func cloneCachedProgram(program CachedProgram) CachedProgram {
 		UserDeclaredGlobals: cloneStringSlice(program.UserDeclaredGlobals),
 		UserConstGlobals:    cloneStringSlice(program.UserConstGlobals),
 		GlobalZeroArgFuncs:  cloneStringSlice(program.GlobalZeroArgFuncs),
+		GlobalTypeNames:     cloneStringSlice(program.GlobalTypeNames),
 		ProgramHash:         program.ProgramHash,
 		GlobalNamesLower:    cloneStringSlice(program.GlobalNamesLower),
 		GlobalNames:         cloneStringSlice(program.GlobalNames),
@@ -1703,6 +1708,7 @@ func immutableCachedProgramView(program CachedProgram) CachedProgram {
 	program.UserDeclaredGlobals = immutableStringView(program.UserDeclaredGlobals)
 	program.UserConstGlobals = immutableStringView(program.UserConstGlobals)
 	program.GlobalZeroArgFuncs = immutableStringView(program.GlobalZeroArgFuncs)
+	program.GlobalTypeNames = immutableStringView(program.GlobalTypeNames)
 	program.GlobalNames = immutableStringView(program.GlobalNames)
 	program.DeclaredGlobalNames = immutableStringView(program.DeclaredGlobalNames)
 	program.ConstGlobalNames = immutableStringView(program.ConstGlobalNames)
@@ -1741,6 +1747,7 @@ func estimateProgramSizeBytes(program CachedProgram) int64 {
 	size += estimateStringSliceSize(program.UserDeclaredGlobals)
 	size += estimateStringSliceSize(program.UserConstGlobals)
 	size += estimateStringSliceSize(program.GlobalZeroArgFuncs)
+	size += estimateStringSliceSize(program.GlobalTypeNames)
 	size += estimateStringSliceSize(program.IncludeDependencies)
 	size += estimateStringSliceSize(program.GlobalNamesLower)
 	size += int64(len(program.SourceName))

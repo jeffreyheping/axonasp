@@ -7802,3 +7802,266 @@ Response.Write p.getClickLink(false) & "|" & p.getLink(false)
 		t.Fatalf("expected %q, got %q", expected, got)
 	}
 }
+
+// TestVB6AsTypeGlobalVar verifies that Dim x As Integer initializes the variable to 0
+// and enforces the declared type on assignment.
+func TestVB6AsTypeGlobalVar(t *testing.T) {
+	source := `<%
+Dim a As Integer
+a = 42
+Response.Write a & "|"
+
+Dim b As String
+b = "hello"
+Response.Write b & "|"
+
+Dim c As Boolean
+c = True
+Response.Write c & "|"
+
+Dim d As Double
+d = 3.14
+Response.Write d & "|"
+
+' Backward compatibility: no As clause = Variant
+Dim e
+e = "variant"
+Response.Write e
+%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	expected := "42|hello|True|3.14|variant"
+	if got := output.String(); got != expected {
+		t.Fatalf("expected %q, got %q", expected, got)
+	}
+}
+
+// TestVB6AsTypeDefaultValues verifies that typed variables are initialized to their type's zero value.
+func TestVB6AsTypeDefaultValues(t *testing.T) {
+	source := `<%
+Response.Write "I="
+Dim i As Integer
+Response.Write i & "|"
+
+Response.Write "S="
+Dim s As String
+Response.Write "[" & s & "]|"
+
+Response.Write "B="
+Dim b As Boolean
+Response.Write b & "|"
+
+Response.Write "D="
+Dim d As Double
+Response.Write d
+%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVMFromCompiler(compiler)
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	expected := "I=0|S=[]|B=False|D=0"
+	if got := output.String(); got != expected {
+		t.Fatalf("expected %q, got %q", expected, got)
+	}
+}
+
+// TestVB6AsTypeCoercion verifies that assigning a value of a different type coerces correctly.
+func TestVB6AsTypeCoercion(t *testing.T) {
+	source := `<%
+Dim x As Integer
+x = "123"       ' String to Integer coercion
+Response.Write x & "|"
+
+Dim y As String
+y = 456         ' Integer to String coercion
+Response.Write y & "|"
+
+Dim z As Boolean
+z = 1           ' Integer to Boolean coercion
+Response.Write z
+%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVMFromCompiler(compiler)
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	expected := "123|456|True"
+	if got := output.String(); got != expected {
+		t.Fatalf("expected %q, got %q", expected, got)
+	}
+}
+
+// TestVB6AsTypeTypeMismatchError verifies that assigning an incompatible type raises Type mismatch.
+func TestVB6AsTypeTypeMismatchError(t *testing.T) {
+	source := `<%
+On Error Resume Next
+Dim x As Integer
+x = "not-a-number"
+Response.Write Err.Number & "|"
+Err.Clear
+
+Dim y As String
+y = 42
+Response.Write y
+%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVMFromCompiler(compiler)
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	expected := strconv.Itoa(vbscript.HRESULTFromVBScriptCode(vbscript.TypeMismatch)) + "|42"
+	if got := output.String(); got != expected {
+		t.Fatalf("expected %q, got %q", expected, got)
+	}
+}
+
+// TestVB6AsTypePublicPrivate verifies Public/Private scoped declarations with As Type.
+func TestVB6AsTypePublicPrivate(t *testing.T) {
+	source := `<%
+Public x As Integer
+x = 10
+Response.Write x & "|"
+
+Private y As String
+y = "private"
+Response.Write y
+%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVMFromCompiler(compiler)
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	expected := "10|private"
+	if got := output.String(); got != expected {
+		t.Fatalf("expected %q, got %q", expected, got)
+	}
+}
+
+// TestVB6AsTypeLocalInFunction verifies As Type works inside Sub/Function scopes.
+func TestVB6AsTypeLocalInFunction(t *testing.T) {
+	source := `<%
+Sub TestSub()
+	Dim x As Integer
+	x = 99
+	Response.Write x
+End Sub
+
+Call TestSub()
+%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVMFromCompiler(compiler)
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	expected := "99"
+	if got := output.String(); got != expected {
+		t.Fatalf("expected %q, got %q", expected, got)
+	}
+}
+
+// TestVB6AsTypeMultiple verifies multiple variables on one Dim with As Type.
+func TestVB6AsTypeMultiple(t *testing.T) {
+	source := `<%
+Dim a As Integer, b As String
+a = 7
+b = "text"
+Response.Write a & "|" & b
+%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVMFromCompiler(compiler)
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	expected := "7|text"
+	if got := output.String(); got != expected {
+		t.Fatalf("expected %q, got %q", expected, got)
+	}
+}

@@ -76,13 +76,48 @@
 
             <div>
                 <textarea id="code"><%
-Response.Write "<h1>Hello from AxonASP WASM!</h1>"
-Response.Write "<p>The current time is: " & Now() & "</p>"
+Dim Axon
+Set Axon = Server.CreateObject("G3AXONLIVE")
 
-Dim i
-For i = 1 to 5
-    Response.Write "Line " & i & "<br>"
-Next
+If Axon.InitPage() Then
+    ' We are handling an async WASM event!
+    If Axon.EventName = "click" Then
+        Dim currentCount
+        currentCount = Axon.GetComponentProperty("btn1", "data-count")
+        
+        If IsEmpty(currentCount) Or currentCount = "" Then currentCount = 0
+        currentCount = CInt(currentCount) + 1
+        
+        ' Update internal state
+        Axon.SetComponentProperty "btn1", "data-count", currentCount
+        
+        ' Directly manipulate the DOM via WASM syscall/js!
+        Dim comp
+        Set comp = Axon.GetComponent("btn1")
+        comp.SetStyle "background", "green"
+        comp.SetStyle "color", "white"
+        comp.SetValue "Clicked " & currentCount & " times!"
+    ElseIf Axon.EventName = "ask_name" Then
+        Dim userName
+        userName = InputBox("What is your name?", "AxonASP WASM", "Guest")
+        
+        If userName <> "" Then
+            If MsgBox("Hello " & userName & "! Do you like WebAssembly?", vbYesNo + vbQuestion) = vbYes Then
+                MsgBox "Great! AxonASP loves WASM too."
+            Else
+                MsgBox "Oh, maybe next time!"
+            End If
+        End If
+    End If
+    
+    Axon.EndAsyncResponse()
+End If
+
+' Initial Page Render
+Response.Write "<h1>AxonLive in WASM!</h1>"
+Response.Write "<p>Click the buttons to interact with the AxonASP engine natively in your browser.</p>"
+Response.Write "<button id='btn1' onclick='dispatchLiveEvent(""btn1"", ""click"")'>Reactive Counter</button> "
+Response.Write "<button id='btn2' onclick='dispatchLiveEvent(""btn2"", ""ask_name"")'>Interactive Prompts</button>"
 %></textarea>
                 <button onclick="runCode()" id="runBtn" disabled>Run ASP Code</button>
             </div>
@@ -103,6 +138,26 @@ Next
                 document.getElementById("status").style.color = "red";
             });
 
+            // AxonLive Shim for WASM
+            window.G3AxonLive = {
+                currentCode: "",
+                dispatch: async function(componentId, eventName, eventArgs = {}) {
+                    if (typeof AxonASP !== "undefined") {
+                        try {
+                            // Call WASM dispatchLiveEvent
+                            await AxonASP.dispatchLiveEvent("wasm-session", componentId, eventName, JSON.stringify(eventArgs), this.currentCode);
+                        } catch (e) {
+                            console.error("AxonLive WASM Error:", e);
+                        }
+                    }
+                }
+            };
+
+            // Global wrapper function so onclick="dispatchLiveEvent(...)" inside ASP code works
+            window.dispatchLiveEvent = function(componentId, eventName, eventArgs = {}) {
+                window.G3AxonLive.dispatch(componentId, eventName, eventArgs);
+            };
+
             // 1. Transformamos a função em async
             async function runCode() {
                 const outEl = document.getElementById("output");
@@ -110,6 +165,8 @@ Next
 
                 if (typeof AxonASP !== "undefined") {
                     const code = document.getElementById("code").value;
+                    window.G3AxonLive.currentCode = code; // Save code for live events
+
                     try {
                         runBtn.disabled = true;
                         outEl.innerHTML = "<em>Executando no WebAssembly...</em>";

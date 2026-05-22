@@ -429,7 +429,7 @@ func (s *G3Search) search(term string) Value {
 	}
 	defer release()
 
-	query := bluge.NewMatchQuery(term).SetField("content")
+	query := bluge.NewMatchQuery(term).SetField("content").SetFuzziness(1)
 	searchRequest := bluge.NewAllMatches(query)
 
 	iter, err := reader.Search(context.Background(), searchRequest)

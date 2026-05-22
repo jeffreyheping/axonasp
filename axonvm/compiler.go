@@ -101,13 +101,15 @@ type Compiler struct {
 	bytecode            []byte
 	constants           []Value
 	Globals             *SymbolTable
-	locals              *SymbolTable     // Current function scope
-	declaredGlobals     map[string]bool  // Variables declared via Dim in global scope
-	declaredLocals      map[string]bool  // Variables declared via Dim in local scope
-	constGlobals        map[string]bool  // Constants declared via Const in global scope
-	constLocals         map[string]bool  // Constants declared via Const in local scope
-	constLiteralGlobals map[string]Value // Compile-time known global constant values
-	isLocal             bool             // True if currently compiling a Sub/Function
+	locals              *SymbolTable         // Current function scope
+	declaredGlobals     map[string]bool      // Variables declared via Dim in global scope
+	declaredLocals      map[string]bool      // Variables declared via Dim in local scope
+	globalVarTypes      map[string]ValueType // VB6 As Type declarations for global variables (VTEmpty = Variant)
+	localVarTypes       map[string]ValueType // VB6 As Type declarations for local variables (VTEmpty = Variant)
+	constGlobals        map[string]bool      // Constants declared via Const in global scope
+	constLocals         map[string]bool      // Constants declared via Const in local scope
+	constLiteralGlobals map[string]Value     // Compile-time known global constant values
+	isLocal             bool                 // True if currently compiling a Sub/Function
 
 	// Compilation Options
 	optionExplicit bool // Requires variables to be Dim'ed
@@ -443,6 +445,8 @@ func createCompiler(code string, mode vbscript.LexerMode) *Compiler {
 		locals:                NewSymbolTable(),
 		declaredGlobals:       make(map[string]bool),
 		declaredLocals:        make(map[string]bool),
+		globalVarTypes:        make(map[string]ValueType),
+		localVarTypes:         make(map[string]ValueType),
 		constGlobals:          make(map[string]bool),
 		constLocals:           make(map[string]bool),
 		constLiteralGlobals:   make(map[string]Value),
@@ -1479,6 +1483,30 @@ func (c *Compiler) ActiveVBSConstants() []VBSConstant {
 	}
 	out := make([]VBSConstant, len(c.activeVBSConstants))
 	copy(out, c.activeVBSConstants)
+	return out
+}
+
+// GlobalVarTypes returns a copy of the VB6 As Type declarations for global variables.
+func (c *Compiler) GlobalVarTypes() map[string]ValueType {
+	if c == nil {
+		return nil
+	}
+	out := make(map[string]ValueType, len(c.globalVarTypes))
+	for k, v := range c.globalVarTypes {
+		out[k] = v
+	}
+	return out
+}
+
+// LocalVarTypes returns a copy of the VB6 As Type declarations for local variables.
+func (c *Compiler) LocalVarTypes() map[string]ValueType {
+	if c == nil {
+		return nil
+	}
+	out := make(map[string]ValueType, len(c.localVarTypes))
+	for k, v := range c.localVarTypes {
+		out[k] = v
+	}
 	return out
 }
 

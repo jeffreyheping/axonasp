@@ -26,6 +26,7 @@ import (
 	"io"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -435,12 +436,22 @@ type VM struct {
 	terminatePrepared   bool
 	suppressTerminate   bool
 
-	stack       []Value
-	sp          int
-	ip          int
-	fp          int
-	callStack   []CallFrame
-	jsCallStack []jsCallFrame
+	stack []Value
+	sp    int
+	ip    int
+	fp    int
+	// localTypes stores the declared VB6 type (if any) for each stack slot.
+	// 0 (VTEmpty) = no declared type (Variant). Non-zero = declared type for type enforcement.
+	localTypes [StackSize]ValueType
+	// globalTypes stores the declared VB6 type (if any) for each global slot.
+	// 0 (VTEmpty) = no declared type (Variant). Non-zero = declared type for type enforcement.
+	globalTypes []ValueType
+	// funcLocalTypes maps function entry point bytecode offsets to local variable type
+	// declarations for VB6 As Type support. The inner map key is the local slot offset,
+	// the value is the declared ValueType (VTEmpty = Variant/no constraint).
+	funcLocalTypes map[int]map[int]ValueType
+	callStack      []CallFrame
+	jsCallStack    []jsCallFrame
 	// withStack holds the subject object for each active With...End With block.
 	// OpWithEnter appends, OpWithLeave shrinks, OpWithLoad peeks at the top.
 	withStack         []Value
@@ -493,6 +504,7 @@ type VM struct {
 	baseBytecode         []byte
 	baseConstants        []Value
 	baseGlobals          []Value
+	baseGlobalTypes      []ValueType
 	baseOptionCompare    int
 	baseOptionExplicit   bool
 	baseGlobalNames      []string
@@ -532,6 +544,7 @@ func NewVM(bytecode []byte, constants []Value, globalCount int) *VM {
 		bytecode:                       bytecode,
 		constants:                      constants,
 		Globals:                        make([]Value, globalCount),
+		globalTypes:                    make([]ValueType, globalCount),
 		stack:                          make([]Value, StackSize),
 		sp:                             -1,
 		stmtSP:                         -1,
@@ -680,6 +693,7 @@ func NewVM(bytecode []byte, constants []Value, globalCount int) *VM {
 		runtimeClasses:     make(map[string]RuntimeClassDef),
 		runtimeClassItems:  make(map[int64]*RuntimeClassInstance),
 		classInstanceOrder: make([]int64, 0, 16),
+		funcLocalTypes:     make(map[int]map[int]ValueType),
 		callStack:          make([]CallFrame, 0, 16),
 		jsCallStack:        make([]jsCallFrame, 0, 16),
 		jsTryStack:         make([]int, 0, 8),
@@ -762,6 +776,10 @@ func NewVMFromCompiler(compiler *Compiler) *VM {
 	for key, value := range compiler.constGlobals {
 		vm.constGlobals[key] = value
 	}
+	// Apply VB6 As Type declarations for global variables.
+	vm.applyGlobalVarTypes(compiler.GlobalVarTypes())
+	// Apply VB6 As Type declarations for local variables (function-scoped).
+	vm.applyLocalVarTypes(compiler)
 	vm.captureBaseProgramState()
 	return vm
 }
@@ -973,6 +991,7 @@ func opcodeOperandSize(op OpCode) int {
 	// 4-byte operands
 	case OpLine, OpArraySet, OpCallBuiltin, OpSetDirective, OpSetOption, OpJSCallMember, OpJSTailCallMember, OpJSDefineProperty, OpJSSuperCallMember, OpJSExport:
 		return 4
+	// 8-byte operands
 	// 8-byte operands
 	case OpCallMember:
 		return 8
@@ -1267,6 +1286,11 @@ func (vm *VM) cloneForExecuteGlobal(startIP int) *VM {
 	child.fp = 0
 	child.callStack = make([]CallFrame, 0, 16)
 	child.withStack = make([]Value, 0, 8)
+	// Copy declared type arrays for VB6 As Type support.
+	child.localTypes = vm.localTypes
+	child.globalTypes = make([]ValueType, len(vm.globalTypes))
+	copy(child.globalTypes, vm.globalTypes)
+	child.funcLocalTypes = vm.funcLocalTypes // map reference is shared (read-only after init)
 	child.activeClassObjectID = vm.activeClassObjectID
 	child.terminateCursor = -1
 	child.terminatePrepared = false
@@ -1294,6 +1318,11 @@ func (vm *VM) cloneForExecuteLocal(startIP int) *VM {
 	// clobbered by the caller continuing execution on the parent VM.
 	child.stack = make([]Value, len(vm.stack))
 	copy(child.stack, vm.stack)
+	// Copy the declared type arrays.
+	child.localTypes = vm.localTypes
+	child.globalTypes = make([]ValueType, len(vm.globalTypes))
+	copy(child.globalTypes, vm.globalTypes)
+	child.funcLocalTypes = vm.funcLocalTypes
 	child.ip = startIP
 	child.callStack = make([]CallFrame, len(vm.callStack))
 	copy(child.callStack, vm.callStack)
@@ -1662,6 +1691,17 @@ aspExecLoop:
 			idx := binary.BigEndian.Uint16(vm.bytecode[vm.ip:])
 			vm.ip += 2
 			newVal := vm.pop()
+			// Type enforcement for VB6 As Type declarations.
+			if int(idx) < len(vm.globalTypes) && vm.globalTypes[idx] != VTEmpty {
+				coerced, err := vm.coerceToDeclaredType(newVal, vm.globalTypes[idx])
+				if err != nil {
+					vm.raise(vbscript.TypeMismatch, err.Error())
+					if vm.skipToNextStmt {
+						continue
+					}
+				}
+				newVal = coerced
+			}
 			// Decrement reference count only for object slots to avoid hot-path call overhead.
 			if vm.Globals[idx].Type == VTObject {
 				vm.decrementObjectRefCount(vm.Globals[idx])
@@ -1735,6 +1775,17 @@ aspExecLoop:
 			idx := binary.BigEndian.Uint16(vm.bytecode[vm.ip:])
 			vm.ip += 2
 			newVal := vm.pop()
+			// Type enforcement for VB6 As Type declarations.
+			if int(idx) < len(vm.globalTypes) && vm.globalTypes[idx] != VTEmpty {
+				coerced, err := vm.coerceToDeclaredType(newVal, vm.globalTypes[idx])
+				if err != nil {
+					vm.raise(vbscript.TypeMismatch, err.Error())
+					if vm.skipToNextStmt {
+						continue
+					}
+				}
+				newVal = coerced
+			}
 			// Decrement reference count only for object slots to avoid hot-path call overhead.
 			if vm.Globals[idx].Type == VTObject {
 				vm.decrementObjectRefCount(vm.Globals[idx])
@@ -1753,6 +1804,17 @@ aspExecLoop:
 			vm.ip += 2
 			slot := vm.fp + int(offset)
 			newVal := vm.pop()
+			// Type enforcement for VB6 As Type declarations.
+			if declaredType := vm.localTypes[slot]; declaredType != VTEmpty {
+				coerced, err := vm.coerceToDeclaredType(newVal, declaredType)
+				if err != nil {
+					vm.raise(vbscript.TypeMismatch, err.Error())
+					if vm.skipToNextStmt {
+						continue
+					}
+				}
+				newVal = coerced
+			}
 			// Decrement reference count only for object slots to avoid hot-path call overhead.
 			if vm.stack[slot].Type == VTObject {
 				vm.decrementObjectRefCount(vm.stack[slot])
@@ -1842,6 +1904,17 @@ aspExecLoop:
 			vm.ip += 2
 			slot := vm.fp + int(offset)
 			newVal := vm.pop()
+			// Type enforcement for VB6 As Type declarations.
+			if declaredType := vm.localTypes[slot]; declaredType != VTEmpty {
+				coerced, err := vm.coerceToDeclaredType(newVal, declaredType)
+				if err != nil {
+					vm.raise(vbscript.TypeMismatch, err.Error())
+					if vm.skipToNextStmt {
+						continue
+					}
+				}
+				newVal = coerced
+			}
 			// Decrement reference count only for object slots to avoid hot-path call overhead.
 			if vm.stack[slot].Type == VTObject {
 				vm.decrementObjectRefCount(vm.stack[slot])
@@ -7599,6 +7672,19 @@ func (vm *VM) beginUserSubCall(target Value, args []Value, discardReturn bool, b
 
 	for i := 0; i < localCount; i++ {
 		vm.stack[vm.fp+i] = Value{Type: VTEmpty}
+		vm.localTypes[vm.fp+i] = VTEmpty // Clear any stale declared type from previous frames
+	}
+
+	// Apply VB6 As Type declarations for this function's local variables.
+	entryPoint := int(target.Num)
+	if slotTypes, exists := vm.funcLocalTypes[entryPoint]; exists {
+		for offset, declaredType := range slotTypes {
+			if offset < localCount {
+				idx := vm.fp + offset
+				vm.localTypes[idx] = declaredType
+				vm.stack[idx] = vm.zeroValueForType(declaredType)
+			}
+		}
 	}
 
 	copyCount := len(args)
@@ -7665,6 +7751,194 @@ func (vm *VM) pop() Value {
 	v := vm.stack[vm.sp]
 	vm.sp--
 	return v
+}
+
+// applyLocalVarTypes applies VB6 As Type declarations from the compiler to the VM's
+// funcLocalTypes map. It scans each VTUserSub constant, matches its local variable names
+// against the compiler's localVarTypes map, and stores the resulting slot-to-type mapping.
+func (vm *VM) applyLocalVarTypes(compiler *Compiler) {
+	if vm == nil || compiler == nil || vm.funcLocalTypes == nil {
+		return
+	}
+	localVarTypes := compiler.LocalVarTypes()
+	if len(localVarTypes) == 0 {
+		return
+	}
+	// Scan constants for VTUserSub entries to find function entry points and their local names.
+	for _, constVal := range vm.constants {
+		if constVal.Type != VTUserSub {
+			continue
+		}
+		entryPoint := int(constVal.Num)
+		localNames := constVal.Names
+		if len(localNames) == 0 {
+			continue
+		}
+		slotTypes := make(map[int]ValueType)
+		for offset, name := range localNames {
+			lower := strings.ToLower(name)
+			if declaredType, exists := localVarTypes[lower]; exists && declaredType != VTEmpty {
+				slotTypes[offset] = declaredType
+			}
+		}
+		if len(slotTypes) > 0 {
+			vm.funcLocalTypes[entryPoint] = slotTypes
+		}
+	}
+}
+
+// applyGlobalVarTypes applies VB6 As Type declarations to the VM's global variable slots.
+// Called during VM initialization from compiler metadata.
+func (vm *VM) applyGlobalVarTypes(globalTypes map[string]ValueType) {
+	if vm == nil || len(globalTypes) == 0 {
+		return
+	}
+	for name, declaredType := range globalTypes {
+		if declaredType == VTEmpty {
+			continue
+		}
+		// Find the global slot index by name.
+		lower := strings.ToLower(name)
+		for idx, gname := range vm.globalNames {
+			if strings.EqualFold(gname, lower) {
+				if idx < len(vm.globalTypes) {
+					vm.globalTypes[idx] = declaredType
+				}
+				if idx < len(vm.Globals) {
+					vm.Globals[idx] = vm.zeroValueForType(declaredType)
+				}
+				break
+			}
+		}
+	}
+}
+
+// zeroValueForType returns the zero-initialized Value for a given declared VB6 type.
+func (vm *VM) zeroValueForType(t ValueType) Value {
+	switch t {
+	case VTInteger:
+		return Value{Type: VTInteger, Num: 0}
+	case VTDouble:
+		return Value{Type: VTDouble, Flt: 0}
+	case VTString:
+		return Value{Type: VTString, Str: ""}
+	case VTBool:
+		return Value{Type: VTBool, Num: 0}
+	case VTObject:
+		return Value{Type: VTNothing}
+	default:
+		return Value{Type: VTEmpty}
+	}
+}
+
+// coerceToDeclaredType attempts to coerce a Value to match a declared VB6 type.
+// If coercion is impossible, returns an error describing the type mismatch.
+func (vm *VM) coerceToDeclaredType(v Value, declaredType ValueType) (Value, error) {
+	if v.Type == VTEmpty || v.Type == VTNull {
+		// Empty/Null can be assigned to any typed variable as the zero value.
+		return vm.zeroValueForType(declaredType), nil
+	}
+
+	switch declaredType {
+	case VTInteger:
+		switch v.Type {
+		case VTInteger:
+			return v, nil
+		case VTDouble:
+			return Value{Type: VTInteger, Num: int64(v.Flt)}, nil
+		case VTBool:
+			return Value{Type: VTInteger, Num: v.Num}, nil
+		case VTString:
+			// Try to parse as number
+			n, err := parseInt64(v.Str)
+			if err != nil {
+				return Value{}, fmt.Errorf("Type mismatch: cannot convert '%s' to Integer", v.Str)
+			}
+			return Value{Type: VTInteger, Num: n}, nil
+		default:
+			return Value{}, fmt.Errorf("Type mismatch: cannot convert to Integer")
+		}
+
+	case VTDouble:
+		switch v.Type {
+		case VTDouble:
+			return v, nil
+		case VTInteger:
+			return Value{Type: VTDouble, Flt: float64(v.Num)}, nil
+		case VTBool:
+			return Value{Type: VTDouble, Flt: float64(v.Num)}, nil
+		case VTString:
+			f, err := parseFloat64(v.Str)
+			if err != nil {
+				return Value{}, fmt.Errorf("Type mismatch: cannot convert '%s' to Double", v.Str)
+			}
+			return Value{Type: VTDouble, Flt: f}, nil
+		default:
+			return Value{}, fmt.Errorf("Type mismatch: cannot convert to Double")
+		}
+
+	case VTString:
+		switch v.Type {
+		case VTString:
+			return v, nil
+		case VTInteger, VTDouble, VTBool:
+			return Value{Type: VTString, Str: v.String()}, nil
+		default:
+			return Value{}, fmt.Errorf("Type mismatch: cannot convert to String")
+		}
+
+	case VTBool:
+		switch v.Type {
+		case VTBool:
+			return v, nil
+		case VTInteger:
+			return Value{Type: VTBool, Num: v.Num}, nil
+		case VTDouble:
+			boolVal := int64(0)
+			if v.Flt != 0 {
+				boolVal = 1
+			}
+			return Value{Type: VTBool, Num: boolVal}, nil
+		case VTString:
+			lower := strings.ToLower(strings.TrimSpace(v.Str))
+			if lower == "true" {
+				return Value{Type: VTBool, Num: 1}, nil
+			} else if lower == "false" {
+				return Value{Type: VTBool, Num: 0}, nil
+			}
+			return Value{}, fmt.Errorf("Type mismatch: cannot convert '%s' to Boolean", v.Str)
+		default:
+			return Value{}, fmt.Errorf("Type mismatch: cannot convert to Boolean")
+		}
+
+	case VTObject:
+		if v.Type == VTObject || v.Type == VTNativeObject || v.Type == VTNothing {
+			return v, nil
+		}
+		return Value{}, fmt.Errorf("Type mismatch: cannot convert to Object")
+
+	default:
+		// Unknown declared type, pass through
+		return v, nil
+	}
+}
+
+// parseInt64 attempts to parse a string as a 64-bit integer.
+func parseInt64(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("empty string")
+	}
+	return strconv.ParseInt(s, 10, 64)
+}
+
+// parseFloat64 attempts to parse a string as a 64-bit float.
+func parseFloat64(s string) (float64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("empty string")
+	}
+	return strconv.ParseFloat(s, 64)
 }
 
 func (vm *VM) raise(code vbscript.VBSyntaxErrorCode, msg string) {

@@ -10,7 +10,6 @@
     * [Install and Run with Docker](md/runtime/docker-installation.md)
     * [AxonASP Internal Architecture](md/runtime/axonasp-internal-architecture.md)
     * [Use axonasp-testsuite](md/runtime/axonasp-testsuite.md)
-    * [global.asa](md/runtime/global-asa.md)
     * [web.config Support](md/runtime/webconfig.md)
     * [MyInfo.xml](md/runtime/myinfo-xml.md)
     * [Script Caching](md/runtime/script-caching.md)
@@ -20,11 +19,9 @@
     * [Running as a Linux Service](md/runtime/linux-service.md)
     * [Installing from Linux Packages](md/runtime/linux-packages.md)
     * [Service Wrapper](md/runtime/service-wrapper.md)
-    * [MCP Server and VS Code](md/runtime/mcp-vscode.md)
     * [CLI and TUI](md/runtime/cli-tui.md)
     * [System Pages and Error Pages](md/runtime/system-pages.md)
     * [AxonASP Error Code Reference](md/runtime/axonasp-error-codes.md)
-    * [Global Console Object](md/runtime/console-object.md)
 * Configuration
     * [axonasp.toml](md/config/axonasp-toml.md)
 * AxonLive
@@ -33,6 +30,7 @@
     * [The Client-Side Script](md/axonlive/client_script.md)
     * [AxonLive Builder](md/axonlive/builder.md)
 * ASP Foundations
+    * [global.asa](md/asp/global-asa.md)
     * [The #include Directive](md/asp/include.md)
     * [ASP Variables](md/asp/variables.md)
     * [ASP Procedures](md/asp/procedures.md)
@@ -50,6 +48,9 @@
     * [Application](md/asp/application.md)
     * [ASPError](md/asp/asperror.md)
     * [ASP Dictionary](md/asp/dictionary.md)
+* ASP Modernization
+    * [Strong Typing Variables](md/asp-modernization/strong-typing-variables.md)
+    * [Global Console Object](md/asp-modernization/console-object.md)
 * Javascript (JScript support)
     * [Use Javascript in ASP Pages](md/javascript/jscript-support.md)
     * [ES6 Features and Beyond](md/javascript/jscript-es6-support.md)
@@ -145,6 +146,7 @@
             * [Axpoweredbyimage](md/libraries/g3axon/methods/axpoweredbyimage.md)
     * G3AXONLIVE
         * [Overview](md/libraries/g3axonlive/overview.md)
+        * [WASM Support](md/libraries/g3axonlive/wasm.md)
         * [Methods](md/libraries/g3axonlive/methods.md)
         * [Properties](md/libraries/g3axonlive/properties.md)
            * Methods Detail
@@ -171,7 +173,6 @@
                * [EventComponentID](md/libraries/g3axonlive/properties/eventcomponentid.md)
                * [EventName](md/libraries/g3axonlive/properties/eventname.md)
                * [IsAsyncRequest](md/libraries/g3axonlive/properties/isasyncrequest.md)
-
     * G3CRYPTO
         * [Overview](md/libraries/g3crypto/overview.md)
         * [Methods](md/libraries/g3crypto/methods.md)
@@ -844,5 +845,6 @@
 * Authoring
     * [Write Manual Pages](md/authoring/write-manual-pages.md)
     * [Program Classic ASP with LLMs](md/authoring/llm-classic-asp-coding.md)
+    * [MCP Server and VS Code](md/authoring/mcp-vscode.md)
 * License and Legal
     * [License and Disclaimer](md/legal/license-and-disclaimer.md)

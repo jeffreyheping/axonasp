@@ -247,6 +247,14 @@ func (vm *VM) captureBaseProgramState() {
 	}
 	copy(vm.baseGlobals, vm.Globals)
 
+	// Save base global types for VB6 As Type support.
+	if cap(vm.baseGlobalTypes) < len(vm.globalTypes) {
+		vm.baseGlobalTypes = make([]ValueType, len(vm.globalTypes))
+	} else {
+		vm.baseGlobalTypes = vm.baseGlobalTypes[:len(vm.globalTypes)]
+	}
+	copy(vm.baseGlobalTypes, vm.globalTypes)
+
 	vm.baseOptionCompare = vm.optionCompare
 	vm.baseOptionExplicit = vm.optionExplicit
 	vm.baseGlobalNames = vm.globalNames
@@ -378,14 +386,23 @@ func (vm *VM) resetGlobals() {
 		clear(vm.Globals)
 	}
 	copy(vm.Globals, vm.baseGlobals)
+	// Restore base global types for VB6 As Type support.
+	if cap(vm.globalTypes) < len(vm.baseGlobalTypes) {
+		vm.globalTypes = make([]ValueType, len(vm.baseGlobalTypes))
+	} else {
+		vm.globalTypes = vm.globalTypes[:len(vm.baseGlobalTypes)]
+	}
+	copy(vm.globalTypes, vm.baseGlobalTypes)
 }
 
 func (vm *VM) resetStack() {
 	if len(vm.stack) != StackSize {
 		vm.stack = make([]Value, StackSize)
+		vm.localTypes = [StackSize]ValueType{} // Reset local types when re-creating stack
 		return
 	}
 	clear(vm.stack)
+	clear(vm.localTypes[:]) // Clear local type declarations
 }
 
 func (vm *VM) ensureReusableMaps() {

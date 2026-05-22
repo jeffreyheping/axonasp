@@ -22,6 +22,7 @@ package axonvm
 
 import (
 	"encoding/binary"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -116,6 +117,17 @@ func buildCachedProgramFromCompiler(compiler *Compiler) CachedProgram {
 	prelude := cloneStringSlice(allGlobals[baseCount:userStart])
 	users := cloneStringSlice(allGlobals[userStart:])
 
+	// Build the VB6 As Type global type declarations list.
+	var globalTypeNames []string
+	if len(compiler.globalVarTypes) > 0 {
+		globalTypeNames = make([]string, 0, len(compiler.globalVarTypes))
+		for name, t := range compiler.globalVarTypes {
+			if t != VTEmpty {
+				globalTypeNames = append(globalTypeNames, name+":"+strconv.Itoa(int(t)))
+			}
+		}
+	}
+
 	program := CachedProgram{
 		Bytecode:            cloneBytecode(compiler.Bytecode()),
 		Constants:           cloneValueSlice(compiler.Constants()),
@@ -130,6 +142,7 @@ func buildCachedProgramFromCompiler(compiler *Compiler) CachedProgram {
 		UserDeclaredGlobals: filterNamesByFlagSet(compiler.declaredGlobals, users),
 		UserConstGlobals:    filterNamesByFlagSet(compiler.constGlobals, users),
 		GlobalZeroArgFuncs:  sortedTrueKeys(compiler.globalZeroArgFuncs),
+		GlobalTypeNames:     globalTypeNames,
 		IncludeDependencies: compiler.IncludeDependencies(),
 	}
 
@@ -233,6 +246,44 @@ func applyProgramGlobalMetadata(vm *VM, program CachedProgram) {
 			continue
 		}
 		vm.globalZeroArgFuncs[name] = true
+	}
+
+	// Apply VB6 As Type global variable type declarations from cached program.
+	if len(program.GlobalTypeNames) > 0 {
+		// Ensure globalTypes slice is large enough.
+		if len(vm.globalTypes) < len(vm.Globals) {
+			vm.globalTypes = make([]ValueType, len(vm.Globals))
+		}
+		for i := range program.GlobalTypeNames {
+			entry := program.GlobalTypeNames[i]
+			colonIdx := strings.LastIndex(entry, ":")
+			if colonIdx < 1 || colonIdx >= len(entry)-1 {
+				continue
+			}
+			typeName := entry[:colonIdx]
+			typeValStr := entry[colonIdx+1:]
+			typeVal, err := strconv.Atoi(typeValStr)
+			if err != nil || typeVal < 0 || typeVal > 255 {
+				continue
+			}
+			declaredType := ValueType(typeVal)
+			if declaredType == VTEmpty {
+				continue
+			}
+			lower := strings.ToLower(typeName)
+			// Find the global slot index by matching against vm.globalNames.
+			for idx, gname := range vm.globalNames {
+				if strings.EqualFold(gname, lower) {
+					if idx < len(vm.globalTypes) {
+						vm.globalTypes[idx] = declaredType
+					}
+					if idx < len(vm.Globals) {
+						vm.Globals[idx] = vm.zeroValueForType(declaredType)
+					}
+					break
+				}
+			}
+		}
 	}
 }
 

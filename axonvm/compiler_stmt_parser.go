@@ -1687,6 +1687,9 @@ func (c *Compiler) parseScopedVariableDeclaration() {
 		name := c.expectIdentifier()
 		c.declareVar(name)
 
+		// Parse optional VB6 As Type clause.
+		declaredType := c.parseAsTypeClause()
+
 		if c.tryParseArrayDeclaration(name) {
 			if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctEqual {
 				panic(c.vbSyntaxError(vbscript.ExpectedEndOfStatement))
@@ -1696,6 +1699,9 @@ func (c *Compiler) parseScopedVariableDeclaration() {
 				panic(c.vbSyntaxError(vbscript.ExpectedEndOfStatement))
 			}
 		}
+
+		// Emit type initialization opcode if As Type was specified.
+		c.emitTypedInit(name, declaredType)
 
 		if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctComma {
 			c.move()
@@ -1705,11 +1711,89 @@ func (c *Compiler) parseScopedVariableDeclaration() {
 	}
 }
 
+// vb6TypeNameToValueType converts a VB6 type name string to the corresponding ValueType.
+// Returns VTEmpty for "Variant" (meaning no type constraint, standard VBScript behavior).
+// Returns (VTEmpty, false) if the type name is not recognized.
+func vb6TypeNameToValueType(name string) (ValueType, bool) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "integer":
+		return VTInteger, true
+	case "long":
+		return VTInteger, true
+	case "single":
+		return VTDouble, true
+	case "double":
+		return VTDouble, true
+	case "string":
+		return VTString, true
+	case "boolean":
+		return VTBool, true
+	case "byte":
+		return VTInteger, true
+	case "object":
+		return VTObject, true
+	case "variant":
+		return VTEmpty, true // Variant = no constraint (standard behavior)
+	default:
+		return VTEmpty, false
+	}
+}
+
+// matchAsKeyword checks whether the next token is the "As" keyword (case-insensitive).
+// "As" is not a reserved keyword in standard VBScript, so we check by name.
+func (c *Compiler) matchAsKeyword() bool {
+	if c.next == nil {
+		return false
+	}
+	switch t := c.next.(type) {
+	case *vbscript.IdentifierToken:
+		return strings.EqualFold(t.Name, "as")
+	case *vbscript.KeywordOrIdentifierToken:
+		return strings.EqualFold(t.Name, "as")
+	default:
+		return false
+	}
+}
+
+// parseAsTypeClause checks for an optional "As Type" clause and returns the declared type.
+// Returns VTEmpty if no "As" clause is present (meaning Variant/no constraint).
+// If "As" is present but the type name is invalid, it panics with a compile error.
+func (c *Compiler) parseAsTypeClause() ValueType {
+	if !c.matchAsKeyword() {
+		return VTEmpty // No type declared = Variant
+	}
+	c.move() // consume "As"
+	typeName := c.expectIdentifier()
+	declaredType, ok := vb6TypeNameToValueType(typeName)
+	if !ok {
+		panic(c.vbCompileError(vbscript.SyntaxError, fmt.Sprintf("Invalid type name '%s' in As clause. Expected Integer, Long, Single, Double, String, Boolean, Byte, Object, or Variant.", typeName)))
+	}
+	return declaredType
+}
+
+// emitTypedInit records a VB6 As Type declaration for a variable in the compiler's type maps.
+// The VM reads this metadata during initialization via NewVMFromCompiler.
+// If declaredType is VTEmpty (Variant / no As clause), nothing is recorded.
+func (c *Compiler) emitTypedInit(name string, declaredType ValueType) {
+	if declaredType == VTEmpty {
+		return // No type declaration, standard variant behavior
+	}
+	lower := strings.ToLower(name)
+	if c.isLocal {
+		c.localVarTypes[lower] = declaredType
+	} else {
+		c.globalVarTypes[lower] = declaredType
+	}
+}
+
 func (c *Compiler) parseDimStatement() {
 	c.expectKeyword(vbscript.KeywordDim)
 	for {
 		name := c.expectIdentifier()
 		c.declareVar(name)
+
+		// Parse optional VB6 As Type clause.
+		declaredType := c.parseAsTypeClause()
 
 		if c.tryParseArrayDeclaration(name) {
 			if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctEqual {
@@ -1720,6 +1804,9 @@ func (c *Compiler) parseDimStatement() {
 				panic(c.vbSyntaxError(vbscript.ExpectedEndOfStatement))
 			}
 		}
+
+		// Emit type initialization opcode if As Type was specified.
+		c.emitTypedInit(name, declaredType)
 
 		if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctComma {
 			c.move()

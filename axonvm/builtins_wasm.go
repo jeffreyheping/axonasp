@@ -1,4 +1,4 @@
-//go:build !wasm
+//go:build wasm
 
 /*
  * AxonASP Server
@@ -33,6 +33,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall/js"
 	"time"
 	"unicode"
 
@@ -615,16 +616,67 @@ func writeRuneSlice(builder *strings.Builder, runes []rune) {
 	}
 }
 
-// vbsMsgBox always raises one runtime error in ASP because interactive desktop UI is unsupported.
+// vbsMsgBox raises a javascript alert or confirm box in the browser.
 func vbsMsgBox(args []Value) (Value, error) {
-	_ = args
-	return NewEmpty(), newBuiltinVBRuntimeError(vbscript.InvalidProcedureCallOrArgument, fmt.Sprintf("%d: %s (MsgBox)", ErrInteractiveFunctionNotSupportedInASP, ErrInteractiveFunctionNotSupportedInASP.String()))
+	if len(args) < 1 {
+		return NewEmpty(), newBuiltinVBRuntimeError(vbscript.InvalidProcedureCallOrArgument, "MsgBox: prompt is required")
+	}
+
+	prompt := args[0].String()
+	buttons := 0
+	if len(args) >= 2 {
+		buttons = int(args[1].Num)
+	}
+
+	window := js.Global()
+	if window.IsUndefined() || window.IsNull() {
+		return NewInteger(1), nil // Default to vbOK if window is not available
+	}
+
+	// 1 = vbOKCancel, 4 = vbYesNo. Both map well to JS confirm()
+	if (buttons&0xF) == 1 || (buttons&0xF) == 4 {
+		confirmed := window.Call("confirm", prompt).Bool()
+		if confirmed {
+			if (buttons & 0xF) == 4 {
+				return NewInteger(6), nil // vbYes
+			}
+			return NewInteger(1), nil // vbOK
+		}
+		if (buttons & 0xF) == 4 {
+			return NewInteger(7), nil // vbNo
+		}
+		return NewInteger(2), nil // vbCancel
+	}
+
+	// Default: alert()
+	window.Call("alert", prompt)
+	return NewInteger(1), nil // vbOK
 }
 
-// vbsInputBox always raises one runtime error in ASP because interactive desktop UI is unsupported.
+// vbsInputBox raises a javascript prompt box in the browser.
 func vbsInputBox(args []Value) (Value, error) {
-	_ = args
-	return NewEmpty(), newBuiltinVBRuntimeError(vbscript.InvalidProcedureCallOrArgument, fmt.Sprintf("%d: %s (InputBox)", ErrInteractiveFunctionNotSupportedInASP, ErrInteractiveFunctionNotSupportedInASP.String()))
+	if len(args) < 1 {
+		return NewEmpty(), newBuiltinVBRuntimeError(vbscript.InvalidProcedureCallOrArgument, "InputBox: prompt is required")
+	}
+
+	prompt := args[0].String()
+	// title is index 1, default is index 2
+	defaultValue := ""
+	if len(args) >= 3 {
+		defaultValue = args[2].String()
+	}
+
+	window := js.Global()
+	if window.IsUndefined() || window.IsNull() {
+		return NewString(defaultValue), nil
+	}
+
+	result := window.Call("prompt", prompt, defaultValue)
+	if result.IsNull() {
+		return NewString(""), nil // User cancelled
+	}
+
+	return NewString(result.String()), nil
 }
 
 // --- Math and Conversion ---

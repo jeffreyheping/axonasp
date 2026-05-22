@@ -18,51 +18,45 @@
  * Modifications to the core source code of AxonASP Server must be
  * made available under this same license terms.
  */
-//Use go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest
-//Then run "go generate" in the project root to embed version info into the executable
-//You need to specify -64=false/-arm=true if you're trying to create an 32-bit or ARM windows binary, this is required by the new version of golang
 //go:generate goversioninfo -icon=icon_mcp.ico -64=true
 package main
 
 import (
-	"bufio"
 	"context"
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"g3pix.com.br/axonasp/axonconfig"
+	"github.com/blugelabs/bluge"
 	"github.com/fsnotify/fsnotify"
 	"github.com/joho/godotenv"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	"github.com/sahilm/fuzzy"
 	"github.com/spf13/viper"
 )
 
-// DocEntry represents a single AxonASP built-in function or library.
-type DocEntry struct {
-	Title        string
-	Keywords     string
-	Description  string
-	Observations string
-	Syntax       string
-}
-
-// Global state for in-memory caching and hot-reloading
+// Global state and configuration
 var (
 	Version       = "0.0.0.0"
 	mu            sync.RWMutex
-	cachedDocs    []DocEntry
-	lastModTime   time.Time
-	docFilePath   = "mcp/docs.md"
+	docFilePath   = "./www/manual/md/"
 	styleFilePath = "mcp/aspcodingstyle.md"
+	indexPath     = "./mcp/search-index/manual/"
 	mcpMode       = "stdio"
 	mcpSSEPort    = 8000
+	globalReader  *bluge.Reader
+	readerOnce    sync.Once
 )
+
+// SearchIndex manages the Bluge index lifecycle.
+type SearchIndex struct {
+	indexPath string
+	docsPath  string
+}
 
 // init loads environment variables and applies TOML-based configuration through Viper.
 func init() {
@@ -104,167 +98,222 @@ func applyMCPConfigValues(v *viper.Viper) {
 	}
 }
 
-// LoadDocsFromMarkdown parses the markdown file into a slice of DocEntry structs.
-func LoadDocsFromMarkdown(filePath string) ([]DocEntry, error) {
-	file, err := os.Open(filePath)
+// Rebuild clears and recreates the Bluge index by scanning the documentation directory.
+func (s *SearchIndex) Rebuild() error {
+	fmt.Fprintf(os.Stderr, "[G3pix AxonASP MCP] Rebuilding index at %s from %s...\n", s.indexPath, s.docsPath)
+
+	// Remove old index
+	_ = os.RemoveAll(s.indexPath)
+	if err := os.MkdirAll(s.indexPath, 0755); err != nil {
+		return fmt.Errorf("failed to create index directory: %w", err)
+	}
+
+	config := bluge.DefaultConfig(s.indexPath)
+	writer, err := bluge.OpenWriter(config)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("failed to open index writer: %w", err)
 	}
-	defer file.Close()
+	defer writer.Close()
 
-	var docs []DocEntry
-	var currentDoc *DocEntry
-	inCodeBlock := false
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		trimmedLine := strings.TrimSpace(line)
-
-		// Detect new entry
-		if strings.HasPrefix(trimmedLine, "## ") {
-			if currentDoc != nil {
-				docs = append(docs, *currentDoc)
-			}
-			currentDoc = &DocEntry{
-				Title: strings.TrimPrefix(trimmedLine, "## "),
-			}
-			continue
-		}
-
-		if currentDoc == nil {
-			continue
-		}
-
-		// Parse metadata fields
-		if strings.HasPrefix(trimmedLine, "**Keywords:**") {
-			currentDoc.Keywords = strings.TrimSpace(strings.TrimPrefix(trimmedLine, "**Keywords:**"))
-			continue
-		}
-		if strings.HasPrefix(trimmedLine, "**Description:**") {
-			currentDoc.Description = strings.TrimSpace(strings.TrimPrefix(trimmedLine, "**Description:**"))
-			continue
-		}
-		if strings.HasPrefix(trimmedLine, "**Observations:**") {
-			currentDoc.Observations = strings.TrimSpace(strings.TrimPrefix(trimmedLine, "**Observations:**"))
-			continue
-		}
-
-		// Handle code blocks for syntax
-		if strings.HasPrefix(trimmedLine, "```") {
-			inCodeBlock = !inCodeBlock
-			continue
-		}
-
-		if inCodeBlock {
-			currentDoc.Syntax += line + "\n"
-		}
-	}
-
-	if currentDoc != nil {
-		docs = append(docs, *currentDoc)
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-
-	return docs, nil
+	visited := make(map[string]bool)
+	return s.walkAndIndex(writer, s.docsPath, "", visited, 0)
 }
 
-// reloadDocsIfNeeded checks if docs.md was modified and reloads it into memory.
-func reloadDocsIfNeeded() error {
-	info, err := os.Stat(docFilePath)
-	if err != nil {
-		return fmt.Errorf("could not stat %s: %w", docFilePath, err)
+// walkAndIndex recursively scans a directory and indexes .md files with symlink loop protection.
+func (s *SearchIndex) walkAndIndex(writer *bluge.Writer, absPath, relPath string, visited map[string]bool, depth int) error {
+	if depth > 20 {
+		return nil // Safety limit for recursion
 	}
 
-	// If file was modified after our last load, trigger a reload
-	if info.ModTime().After(lastModTime) {
-		mu.Lock()
-		defer mu.Unlock()
+	// Canonicalize path to detect symlink loops
+	realPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		return nil // Skip broken symlinks or inaccessible paths
+	}
+	if visited[realPath] {
+		return nil // Loop detected
+	}
+	visited[realPath] = true
 
-		// Double-check inside lock to prevent race conditions
-		if info.ModTime().After(lastModTime) {
-			docs, err := LoadDocsFromMarkdown(docFilePath)
-			if err != nil {
-				return fmt.Errorf("failed to parse markdown: %w", err)
+	entries, err := os.ReadDir(absPath)
+	if err != nil {
+		return fmt.Errorf("failed to read directory %s: %w", absPath, err)
+	}
+
+	batch := bluge.NewBatch()
+	for _, entry := range entries {
+		name := entry.Name()
+		entryAbs := filepath.Join(absPath, name)
+		entryRel := name
+		if relPath != "" {
+			entryRel = filepath.Join(relPath, name)
+		}
+
+		// Handle directory or symlink to directory
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+
+		isDir := info.IsDir()
+		if info.Mode()&os.ModeSymlink != 0 {
+			resolvedInfo, err := os.Stat(entryAbs)
+			if err == nil && resolvedInfo.IsDir() {
+				isDir = true
 			}
-			cachedDocs = docs
-			lastModTime = info.ModTime()
-			// Firing a log to stderr (so it doesn't break stdout MCP communication)
-			fmt.Fprintf(os.Stderr, "[G3pix AxonASP MCP] Reloaded %d functions from %s\n", len(docs), docFilePath)
+		}
+
+		if isDir {
+			// Skip the index directory itself if it happens to be inside docsPath
+			if strings.Contains(filepath.ToSlash(entryAbs), "mcp/search-index") {
+				continue
+			}
+			if err := s.walkAndIndex(writer, entryAbs, entryRel, visited, depth+1); err != nil {
+				return err
+			}
+		} else if strings.HasSuffix(strings.ToLower(name), ".md") {
+			content, err := os.ReadFile(entryAbs)
+			if err != nil {
+				continue
+			}
+
+			docID := filepath.ToSlash(entryRel)
+			doc := bluge.NewDocument(docID)
+			// Index content for search, store it for snippets
+			doc.AddField(bluge.NewTextField("content", string(content)).StoreValue())
+			// Store the relative path for retrieval
+			doc.AddField(bluge.NewStoredOnlyField("path", []byte(docID)))
+
+			batch.Update(doc.ID(), doc)
 		}
 	}
+
+	if err := writer.Batch(batch); err != nil {
+		return fmt.Errorf("failed to execute batch for %s: %w", absPath, err)
+	}
+
 	return nil
 }
 
-// getSearchableStrings generates a slice of strings for the fuzzy matcher.
-func getSearchableStrings(docs []DocEntry) []string {
-	var list []string
-	for _, doc := range docs {
-		// Combine Title and Keywords to increase match accuracy
-		list = append(list, doc.Title+" "+doc.Keywords)
+// createSnippet extracts a brief snippet from the content for search results.
+func createSnippet(content string, length int) string {
+	content = strings.ReplaceAll(content, "\n", " ")
+	content = strings.ReplaceAll(content, "\r", "")
+	content = strings.TrimSpace(content)
+	if len(content) <= length {
+		return content
 	}
-	return list
+	return content[:length] + "..."
 }
 
-// SearchHandler executes the fuzzy search logic and returns the Markdown snippet.
+// searchHandler executes the fuzzy search logic using Bluge and returns a list of paths.
 func searchHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args, ok := request.Params.Arguments.(map[string]interface{})
 	if !ok {
 		return mcp.NewToolResultError("Invalid arguments format. Expected a map."), nil
 	}
 
-	query, ok := args["query"].(string)
-	if !ok || strings.TrimSpace(query) == "" {
+	queryTerm, ok := args["query"].(string)
+	if !ok || strings.TrimSpace(queryTerm) == "" {
 		return mcp.NewToolResultError("Argument 'query' is required and must be a non-empty string."), nil
 	}
 
-	// Ensure our in-memory docs are up-to-date before searching
-	if err := reloadDocsIfNeeded(); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Database error: %v", err)), nil
-	}
-
 	mu.RLock()
-	docsToSearch := cachedDocs
+	reader := globalReader
 	mu.RUnlock()
 
-	searchList := getSearchableStrings(docsToSearch)
-	matches := fuzzy.Find(query, searchList)
+	if reader == nil {
+		return mcp.NewToolResultError("Search index is not initialized."), nil
+	}
 
-	if len(matches) == 0 {
-		return mcp.NewToolResultText(fmt.Sprintf("No documentation found for: '%s'. Try different keywords. You should ensure your query is short using the least number os keywords. Eg.: g3db select", query)), nil
+	// Create a MatchQuery with fuzziness
+	query := bluge.NewMatchQuery(queryTerm).SetField("content").SetFuzziness(1)
+	searchRequest := bluge.NewTopNSearch(5, query)
+
+	iter, err := reader.Search(ctx, searchRequest)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Search error: %v", err)), nil
+	}
+
+	var results []struct {
+		Path    string
+		Score   float64
+		Snippet string
+	}
+
+	match, err := iter.Next()
+	for err == nil && match != nil {
+		var path string
+		var content string
+		match.VisitStoredFields(func(field string, value []byte) bool {
+			if field == "path" {
+				path = string(value)
+			} else if field == "content" {
+				content = string(value)
+			}
+			return true
+		})
+
+		results = append(results, struct {
+			Path    string
+			Score   float64
+			Snippet string
+		}{
+			Path:    path,
+			Score:   match.Score,
+			Snippet: createSnippet(content, 150),
+		})
+		match, err = iter.Next()
+	}
+
+	if len(results) == 0 {
+		return mcp.NewToolResultText(fmt.Sprintf("No documentation found for: '%s'. Try different keywords. Use short queries like 'G3JSON' or 'database connection'.", queryTerm)), nil
 	}
 
 	// Build the response in Markdown format
 	var responseBuilder strings.Builder
-	responseBuilder.WriteString(fmt.Sprintf("The 3 best matches for your search '%s'. You must carefully read all observations and implementation parameters before proceeding. ALWAYS prioritize existing server-side implementations over recreating Classic ASP code from scratch; for example, strictly use the native G3JSON object for JSON manipulation rather than raw parsing or custom ASP classes. Furthermore, you must adhere to standard Classic ASP coding patterns by avoiding single-line syntax where distinct lines are required, and always explicitly closing conditional blocks with 'End If':\n\n", query))
+	responseBuilder.WriteString(fmt.Sprintf("The best matches for your search '%s'. You must select a file path and use the 'read_axonasp_doc' tool to see the full content and implementation details. ALWAYS prioritize existing server-side implementations over recreating Classic ASP code from scratch; for example, strictly use the native G3JSON object for JSON manipulation rather than raw parsing or custom ASP classes. Furthermore, you must adhere to standard Classic ASP coding patterns by avoiding single-line syntax where distinct lines are required, and always explicitly closing conditional blocks with 'End If':\n\n", queryTerm))
 
-	// Return top 3 matches maximum
-	limit := 3
-	if len(matches) < 3 {
-		limit = len(matches)
-	}
-
-	for i := 0; i < limit; i++ {
-		doc := docsToSearch[matches[i].Index]
-		responseBuilder.WriteString(fmt.Sprintf("### Option %d: %s\n", i+1, doc.Title))
-		responseBuilder.WriteString(fmt.Sprintf("- **Description:** %s\n", doc.Description))
-		if doc.Observations != "" {
-			responseBuilder.WriteString(fmt.Sprintf("- **Observations:** %s\n", doc.Observations))
-		}
-		responseBuilder.WriteString(fmt.Sprintf("- **Syntax:**\n```vbscript\n%s\n```\n\n", strings.TrimSpace(doc.Syntax)))
+	for i, res := range results {
+		responseBuilder.WriteString(fmt.Sprintf("### Match %d: %s\n", i+1, res.Path))
+		responseBuilder.WriteString(fmt.Sprintf("- **Score:** %.4f\n", res.Score))
+		responseBuilder.WriteString(fmt.Sprintf("- **Snippet:** %s\n\n", res.Snippet))
 	}
 
 	return mcp.NewToolResultText(responseBuilder.String()), nil
 }
 
-// getASPCodingStyleHandler returns the full ASP/VBScript coding-style guide for formatting and compatibility guidance.
-func getASPCodingStyleHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	_ = ctx
-	_ = request
+// readDocHandler retrieves the full content of a specific documentation file.
+func readDocHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args, ok := request.Params.Arguments.(map[string]interface{})
+	if !ok {
+		return mcp.NewToolResultError("Invalid arguments format. Expected a map."), nil
+	}
 
+	relPath, ok := args["path"].(string)
+	if !ok || strings.TrimSpace(relPath) == "" {
+		return mcp.NewToolResultError("Argument 'path' is required and must be a non-empty string."), nil
+	}
+
+	// Construct full path and validate security
+	fullPath := filepath.Join(docFilePath, filepath.FromSlash(relPath))
+	absDocs, _ := filepath.Abs(docFilePath)
+	absFile, _ := filepath.Abs(fullPath)
+
+	if !strings.HasPrefix(absFile, absDocs) {
+		return mcp.NewToolResultError("Security error: requested path is outside the documentation directory."), nil
+	}
+
+	content, err := os.ReadFile(fullPath)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to read documentation file: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(string(content)), nil
+}
+
+// getASPCodingStyleHandler returns the full ASP/VBScript coding-style guide.
+func getASPCodingStyleHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	content, err := os.ReadFile(styleFilePath)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to read coding style guide: %v", err)), nil
@@ -277,167 +326,71 @@ func getASPCodingStyleHandler(ctx context.Context, request mcp.CallToolRequest) 
 	return mcp.NewToolResultText(string(content)), nil
 }
 
-// isDocBlockValid returns true when all required markdown fields are present.
-func isDocBlockValid(hasKeywords, hasDescription, hasObservations, hasSyntax, hasCodeBlock bool) bool {
-	return hasKeywords && hasDescription && hasObservations && hasSyntax && hasCodeBlock
-}
-
-// printDocBlockError prints a detailed validation error for a malformed function block.
-func printDocBlockError(functionName string, line int, hasKeywords, hasDescription, hasObservations, hasSyntax, hasCodeBlock bool) {
-	fmt.Printf("\nStructural error detected in function block: '%s' (near line %d)\n", functionName, line)
-	fmt.Println("Missing or incorrectly formatted required fields:")
-	if !hasKeywords {
-		fmt.Println("- Missing required field: **Keywords:**")
-	}
-	if !hasDescription {
-		fmt.Println("- Missing required field: **Description:**")
-	}
-	if !hasObservations {
-		fmt.Println("- Missing required field: **Observations:**")
-	}
-	if !hasSyntax {
-		fmt.Println("- Missing required field: **Syntax:**")
-	}
-	if !hasCodeBlock {
-		fmt.Println("- Missing required VBScript code block (```vbscript ... ```)")
-	}
-}
-
-// runDocsMarkdownLinter validates docs markdown structure and returns process exit code.
-func runDocsMarkdownLinter(filePath string) int {
-	file, err := os.Open(filePath)
-	if err != nil {
-		fmt.Printf("Fatal error: could not open file %s: %v\n", filePath, err)
-		return 1
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	lineNum := 0
-	currentFunction := ""
-	errorsFound := 0
-
-	hasKeywords := false
-	hasDescription := false
-	hasObservations := false
-	hasSyntax := false
-	inCodeBlock := false
-	hasCodeBlock := false
-
-	fmt.Printf("Starting strict validation for %s...\n", filePath)
-
-	for scanner.Scan() {
-		lineNum++
-		line := scanner.Text()
-		trimmed := strings.TrimSpace(line)
-
-		if strings.HasPrefix(trimmed, "## ") {
-			if currentFunction != "" {
-				if !isDocBlockValid(hasKeywords, hasDescription, hasObservations, hasSyntax, hasCodeBlock) {
-					printDocBlockError(currentFunction, lineNum, hasKeywords, hasDescription, hasObservations, hasSyntax, hasCodeBlock)
-					errorsFound++
-				}
-			}
-
-			currentFunction = strings.TrimPrefix(trimmed, "## ")
-			hasKeywords, hasDescription, hasObservations, hasSyntax, hasCodeBlock = false, false, false, false, false
-			inCodeBlock = false
-			continue
-		}
-
-		if currentFunction != "" {
-			switch {
-			case strings.HasPrefix(trimmed, "**Keywords:**"):
-				hasKeywords = true
-			case strings.HasPrefix(trimmed, "**Description:**"):
-				hasDescription = true
-			case strings.HasPrefix(trimmed, "**Observations:**"):
-				hasObservations = true
-			case strings.HasPrefix(trimmed, "**Syntax:**"):
-				hasSyntax = true
-			case strings.HasPrefix(trimmed, "```vbscript"):
-				inCodeBlock = true
-			case inCodeBlock && strings.HasPrefix(trimmed, "```"):
-				inCodeBlock = false
-				hasCodeBlock = true
-			}
-		}
-	}
-
-	if currentFunction != "" {
-		if !isDocBlockValid(hasKeywords, hasDescription, hasObservations, hasSyntax, hasCodeBlock) {
-			printDocBlockError(currentFunction, lineNum, hasKeywords, hasDescription, hasObservations, hasSyntax, hasCodeBlock)
-			errorsFound++
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		fmt.Printf("Error while reading file: %v\n", err)
-		return 1
-	}
-
-	if errorsFound > 0 {
-		fmt.Printf("\nVALIDATION FAILED: %d formatting error(s) found by the linter.\n", errorsFound)
-		fmt.Println("The file was rejected because it does not follow the required MCP documentation structure.")
-		return 1
-	}
-
-	fmt.Println("\nSUCCESS: The file passed all formatting rules and is ready for MCP.")
-	return 0
-}
-
 func main() {
-	lintDocs := flag.Bool("lint-docs", false, "Run docs markdown linter and exit.")
-	docsFile := flag.String("docs-file", docFilePath, "Path to the documentation markdown file.")
+	rebuildIndex := flag.Bool("rebuild-index", false, "Force rebuild of the search index.")
+	docsPathFlag := flag.String("docs-path", docFilePath, "Path to the documentation directory.")
 	flag.Parse()
 
-	docFilePath = *docsFile
+	docFilePath = *docsPathFlag
 
-	if *lintDocs {
-		os.Exit(runDocsMarkdownLinter(docFilePath))
+	// Rebuild index if missing or forced
+	if _, err := os.Stat(indexPath); os.IsNotExist(err) || *rebuildIndex {
+		idx := &SearchIndex{indexPath: indexPath, docsPath: docFilePath}
+		if err := idx.Rebuild(); err != nil {
+			fmt.Fprintf(os.Stderr, "[G3pix AxonASP MCP] Critical Error: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
-	// Initialize the file check on boot
-	if err := reloadDocsIfNeeded(); err != nil {
-		fmt.Fprintf(os.Stderr, "[G3pix AxonASP MCP] Critical Error: %v\n", err)
+	// Open global reader (Singleton)
+	config := bluge.DefaultConfig(indexPath)
+	reader, err := bluge.OpenReader(config)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[G3pix AxonASP MCP] Failed to open index reader: %v\n", err)
 		os.Exit(1)
 	}
+	globalReader = reader
+	defer globalReader.Close()
 
 	// 1. Instantiate the MCP Server
 	s := server.NewMCPServer(
 		"G3pix AxonASP Docs",
-		"1.0.0",
+		"1.1.0",
 		server.WithPromptCapabilities(true),
 	)
 
-	// 2. Create the Tool Definition (English for token optimization)
-	tool := mcp.NewTool(
+	// 2. Register Search Tool
+	searchTool := mcp.NewTool(
 		"search_axonasp_docs",
-		mcp.WithDescription("Search for AxonASP built-in functions, custom objects, and libraries to be used in the Classic ASP implementation of AxonASP. Always use this tool before creating complex code to get the correct syntax and avoid hallucinating or unnecessary manual implementations. Use keywords like function names (e.g., G3JSON), actions (e.g., parse json, database, session, upload), or general topics (e.g., file handling, error handling). Don't use more than 3 keywords. Use get_asp_coding_style tool to get the official coding style guide for Classic ASP and VBScript. You must use english keywords."), // The description is intentionally verbose to guide the user towards effective queries and to optimize token usage by providing clear instructions on how to search for documentation.
-		mcp.WithString("query", mcp.Required(), mcp.Description("Search term, module name, or action (e.g., G3JSON, parse json, database). Max of 3 keywords. You must use english keywords.")),
+		mcp.WithDescription("Search for AxonASP built-in functions, custom objects, and libraries. Returns a list of matching file paths and snippets. Use english keywords."),
+		mcp.WithString("query", mcp.Required(), mcp.Description("Search term or action (e.g., G3JSON, database connection).")),
 	)
+	s.AddTool(searchTool, searchHandler)
 
-	// 3. Register the tool
-	s.AddTool(tool, searchHandler)
+	// 3. Register Read Tool
+	readTool := mcp.NewTool(
+		"read_axonasp_doc",
+		mcp.WithDescription("Read the full content of a documentation file using the path obtained from search results."),
+		mcp.WithString("path", mcp.Required(), mcp.Description("The relative path of the file (e.g., libraries/g3json/overview.md).")),
+	)
+	s.AddTool(readTool, readDocHandler)
 
+	// 4. Register Style Tool
 	styleTool := mcp.NewTool(
 		"get_asp_coding_style",
-		mcp.WithDescription("Get the official Classic ASP and VBScript coding-style instructions used by AxonASP. Call this tool whenever you need code formatting rules, control-structure conventions, object assignment rules, or compatibility guidance before writing or refactoring ASP code. Returns the full content of mcp/aspcodingstyle.md."),
+		mcp.WithDescription("Get the official Classic ASP and VBScript coding-style guide used by AxonASP."),
 	)
-
 	s.AddTool(styleTool, getASPCodingStyleHandler)
 
-	// 4. Start server based on configured mode (stdio or SSE)
+	// 5. Start server
 	if mcpMode == "sse" {
 		addr := fmt.Sprintf(":%d", mcpSSEPort)
 		fmt.Fprintf(os.Stderr, "[G3pix AxonASP MCP] Starting in SSE mode on %s\n", addr)
-
 		sseServer := server.NewSSEServer(
 			s,
 			server.WithBaseURL(fmt.Sprintf("http://localhost:%d", mcpSSEPort)),
 			server.WithUseFullURLForMessageEndpoint(true),
 		)
-
 		if err := sseServer.Start(addr); err != nil {
 			fmt.Fprintf(os.Stderr, "MCP SSE Server error: %v\n", err)
 		}

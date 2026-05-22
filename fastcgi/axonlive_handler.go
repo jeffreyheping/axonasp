@@ -138,12 +138,20 @@ func handleFCGIG3AxonLiveFetch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve to a filesystem path within RootDir.
-	relativePath := strings.TrimPrefix(scriptURL, "/")
-	fullPath := filepath.Join(RootDir, filepath.FromSlash(relativePath))
+	// Determine the effective document root for this specific FastCGI request.
+	// We use the same logic as handleRequest: DOCUMENT_ROOT param if available, otherwise RootDir.
+	documentRoot := strings.TrimSpace(getFastCGIParam(r, "DOCUMENT_ROOT"))
+	effectiveRoot := RootDir
+	if documentRoot != "" {
+		effectiveRoot = documentRoot
+	}
 
-	// Security: ensure the resolved path stays within the configured web root.
-	absRoot, rootErr := filepath.Abs(RootDir)
+	// Resolve to a filesystem path within the effective root.
+	relativePath := strings.TrimPrefix(scriptURL, "/")
+	fullPath := filepath.Join(effectiveRoot, filepath.FromSlash(relativePath))
+
+	// Security: ensure the resolved path stays within the effective web root.
+	absRoot, rootErr := filepath.Abs(effectiveRoot)
 	absPath, pathErr := filepath.Abs(fullPath)
 	if rootErr != nil || pathErr != nil || !strings.HasPrefix(absPath+string(filepath.Separator), absRoot+string(filepath.Separator)) {
 		writeFCGIG3AlJSONError(w, http.StatusForbidden, axonvm.AxonASPErrorMessages[axonvm.ErrG3ALPagePathOutsideRoot])
