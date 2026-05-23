@@ -56,7 +56,7 @@ func (c *Compiler) emitIdentifierValue(name string) {
 
 	// Check for VMENGINE global constant - returns AxonASP engine identification string.
 	if strings.EqualFold(trimmedName, "VMENGINE") {
-		c.emit(OpAxonASP)
+		c.emitExt(ExtOpAxonASP, 0)
 		return
 	}
 

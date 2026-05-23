@@ -108,8 +108,8 @@ Response.Write x
 	if err := compiler.Compile(); err != nil {
 		t.Fatalf("compile failed: %v", err)
 	}
-	if !scanBytecodeForOp(compiler.Bytecode(), OpJumpIfFalse) {
-		t.Fatalf("expected OpJumpIfFalse in compiled If/Else bytecode")
+	if !scanBytecodeForOp(compiler.Bytecode(), OpJumpIfFalse) && !scanBytecodeForOp(compiler.Bytecode(), OpJumpIfLte) {
+		t.Fatalf("expected jump opcode (OpJumpIfFalse or OpJumpIfLte) in compiled If/Else bytecode")
 	}
 	if !scanBytecodeForOp(compiler.Bytecode(), OpNop) {
 		t.Fatalf("expected OpNop placeholders in folded If/Else bytecode")

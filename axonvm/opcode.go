@@ -197,12 +197,6 @@ const (
 	// [OpCode]
 	OpCoerceToValue
 
-	// OpAxonASP pushes the string "G3pix AxonASP VBScript Engine" onto the stack.
-	// This is a special bytecode accessible via the VMENGINE global constant
-	// to test and identify the AxonASP VBScript engine.
-	// [OpCode]
-	OpAxonASP
-
 	// JScript opcodes (isolated execution path)
 	OpJSDeclareName            // [OpCode, NameConstIdxHigh, NameConstIdxLow]
 	OpJSGetName                // [OpCode, NameConstIdxHigh, NameConstIdxLow]
@@ -476,17 +470,30 @@ const (
 	// [OpCode, ModuleConstIdxHigh, ModuleConstIdxLow]
 	OpJSExportAll
 
-	// Phase 1 JScript Math Optimizations
-	OpJSMathSin   // [OpCode]
-	OpJSMathCos   // [OpCode]
-	OpJSMathTan   // [OpCode]
-	OpJSMathAbs   // [OpCode]
-	OpJSMathFloor // [OpCode]
-	OpJSMathCeil  // [OpCode]
-	OpJSMathRound // [OpCode]
-	OpJSMathSqrt  // [OpCode]
-	OpJSMathMin   // [OpCode]
-	OpJSMathMax   // [OpCode]
+	// Fused Branching Super-Instructions
+	// These instructions combine a comparison and a conditional jump to reduce dispatch overhead.
+	// Format: [OpCode(1), Target3(1), Target2(1), Target1(1), Target0(1)] - absolute bytecode target
+	// Total: 5 bytes.
+
+	// OpJumpIfNotEq fuses OpEq + OpJumpIfFalse.
+	OpJumpIfNotEq
+	// OpJumpIfEq fuses OpNeq + OpJumpIfFalse (Jump if Equal).
+	OpJumpIfEq
+	// OpJumpIfNotLt fuses OpLt + OpJumpIfFalse (Jump if Greater or Equal).
+	OpJumpIfNotLt
+	// OpJumpIfLte fuses OpGt + OpJumpIfFalse (Jump if Less or Equal).
+	OpJumpIfLte
+	// OpJumpIfNotIs fuses OpIsRef + OpJumpIfFalse.
+	OpJumpIfNotIs
+
+	// JScript Fused Branching Super-Instructions
+	// Format: [OpCode(1), Target3(1), Target2(1), Target1(1), Target0(1)]
+	OpJSJumpIfLooseNotEq
+	OpJSJumpIfLooseEq
+	OpJSJumpIfStrictNotEq
+	OpJSJumpIfStrictEq
+	OpJSJumpIfNotLess
+	OpJSJumpIfLessEqual
 
 	// OpExtPrefix is the escape opcode for extended instruction space.
 	//
@@ -521,6 +528,23 @@ const (
 	// ExtOpSetRecordMember writes one UDT member value by fixed member index.
 	// [OpExtPrefix, ExtOpSetRecordMember, MemberIdxHigh, MemberIdxLow]
 	ExtOpSetRecordMember
+
+	// ExtOpAxonASP pushes the string "G3pix AxonASP VBScript Engine" onto the stack.
+	// [OpExtPrefix, ExtOpAxonASP] (0 operand bytes)
+	ExtOpAxonASP
+
+	// JScript Math Optimizations
+	// [OpExtPrefix, ExtOpJSMath*, (optional operands)]
+	ExtOpJSMathSin
+	ExtOpJSMathCos
+	ExtOpJSMathTan
+	ExtOpJSMathAbs
+	ExtOpJSMathFloor
+	ExtOpJSMathCeil
+	ExtOpJSMathRound
+	ExtOpJSMathSqrt
+	ExtOpJSMathMin
+	ExtOpJSMathMax
 )
 
 func (op OpCode) String() string {
@@ -691,8 +715,6 @@ func (op OpCode) String() string {
 		return "OpJSRootFrameLeave"
 	case OpCoerceToValue:
 		return "OpCoerceToValue"
-	case OpAxonASP:
-		return "OpAxonASP"
 	case OpJSDeclareName:
 		return "OpJSDeclareName"
 	case OpJSGetName:
@@ -967,26 +989,28 @@ func (op OpCode) String() string {
 		return "OpJSForOfCleanup"
 	case OpJSExportAll:
 		return "OpJSExportAll"
-	case OpJSMathSin:
-		return "OpJSMathSin"
-	case OpJSMathCos:
-		return "OpJSMathCos"
-	case OpJSMathTan:
-		return "OpJSMathTan"
-	case OpJSMathAbs:
-		return "OpJSMathAbs"
-	case OpJSMathFloor:
-		return "OpJSMathFloor"
-	case OpJSMathCeil:
-		return "OpJSMathCeil"
-	case OpJSMathRound:
-		return "OpJSMathRound"
-	case OpJSMathSqrt:
-		return "OpJSMathSqrt"
-	case OpJSMathMin:
-		return "OpJSMathMin"
-	case OpJSMathMax:
-		return "OpJSMathMax"
+	case OpJumpIfNotEq:
+		return "OpJumpIfNotEq"
+	case OpJumpIfEq:
+		return "OpJumpIfEq"
+	case OpJumpIfNotLt:
+		return "OpJumpIfNotLt"
+	case OpJumpIfLte:
+		return "OpJumpIfLte"
+	case OpJumpIfNotIs:
+		return "OpJumpIfNotIs"
+	case OpJSJumpIfLooseNotEq:
+		return "OpJSJumpIfLooseNotEq"
+	case OpJSJumpIfLooseEq:
+		return "OpJSJumpIfLooseEq"
+	case OpJSJumpIfStrictNotEq:
+		return "OpJSJumpIfStrictNotEq"
+	case OpJSJumpIfStrictEq:
+		return "OpJSJumpIfStrictEq"
+	case OpJSJumpIfNotLess:
+		return "OpJSJumpIfNotLess"
+	case OpJSJumpIfLessEqual:
+		return "OpJSJumpIfLessEqual"
 	default:
 		return "OpUnknown"
 	}
@@ -1000,6 +1024,28 @@ func (op ExtOpCode) String() string {
 		return "ExtOpGetRecordMember"
 	case ExtOpSetRecordMember:
 		return "ExtOpSetRecordMember"
+	case ExtOpAxonASP:
+		return "ExtOpAxonASP"
+	case ExtOpJSMathSin:
+		return "ExtOpJSMathSin"
+	case ExtOpJSMathCos:
+		return "ExtOpJSMathCos"
+	case ExtOpJSMathTan:
+		return "ExtOpJSMathTan"
+	case ExtOpJSMathAbs:
+		return "ExtOpJSMathAbs"
+	case ExtOpJSMathFloor:
+		return "ExtOpJSMathFloor"
+	case ExtOpJSMathCeil:
+		return "ExtOpJSMathCeil"
+	case ExtOpJSMathRound:
+		return "ExtOpJSMathRound"
+	case ExtOpJSMathSqrt:
+		return "ExtOpJSMathSqrt"
+	case ExtOpJSMathMin:
+		return "ExtOpJSMathMin"
+	case ExtOpJSMathMax:
+		return "ExtOpJSMathMax"
 	default:
 		return "ExtOpUnknown"
 	}

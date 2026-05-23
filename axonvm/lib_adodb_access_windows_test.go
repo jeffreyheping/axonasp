@@ -31,6 +31,56 @@ import (
 	"time"
 )
 
+func TestADODBAccessMissingDatabaseFailsFast(t *testing.T) {
+	vm := NewVM(nil, nil, 5)
+	defer vm.CleanupRequestResources()
+
+	missingPath := filepath.Join(t.TempDir(), "missing-db.mdb")
+	connVal := vm.newADODBConnection()
+	conn := vm.adodbConnectionItems[connVal.Num]
+	if conn == nil {
+		t.Fatal("expected ADODB connection instance")
+	}
+	conn.connectionString = "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=" + missingPath
+
+	started := time.Now()
+	defer func() {
+		elapsed := time.Since(started)
+		if elapsed > 2*time.Second {
+			t.Fatalf("expected missing database open to fail fast, took %v", elapsed)
+		}
+		recovered := recover()
+		if recovered == nil {
+			t.Fatal("expected provider error panic for missing database")
+		}
+		recoveredErr, ok := recovered.(error)
+		if !ok {
+			t.Fatalf("expected error panic, got %T", recovered)
+		}
+		if conn.state != adStateClosed {
+			t.Fatalf("expected closed connection after missing database failure, state=%d", conn.state)
+		}
+		if len(conn.errors) == 0 {
+			t.Fatal("expected ADODB errors collection entry for missing database")
+		}
+		lastErr := conn.errors[len(conn.errors)-1]
+		if !strings.EqualFold(lastErr.source, "ADODB.Connection.Open") {
+			t.Fatalf("expected ADODB.Connection.Open source, got %q", lastErr.source)
+		}
+		if !strings.Contains(strings.ToLower(lastErr.description), "does not exist") {
+			t.Fatalf("expected missing file description, got %q", lastErr.description)
+		}
+		if !strings.Contains(lastErr.description, missingPath) {
+			t.Fatalf("expected missing path %q in description %q", missingPath, lastErr.description)
+		}
+		if !strings.Contains(strings.ToLower(recoveredErr.Error()), "does not exist") {
+			t.Fatalf("expected VM error to mention missing database, got %v", recoveredErr)
+		}
+	}()
+
+	vm.adodbConnectionOpen(conn)
+}
+
 func TestADODBAccessJoinRecordsetOpen(t *testing.T) {
 	repoRoot, err := filepath.Abs("..")
 	if err != nil {

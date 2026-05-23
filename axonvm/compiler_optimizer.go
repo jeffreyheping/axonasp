@@ -38,10 +38,120 @@ func (c *Compiler) optimizePeephole() {
 		propagated := c.optimizeLocalCopyPropagationPass()
 		intOptimized := c.optimizeIntegerArithmeticPass()
 		deadCode := c.optimizeDeadConditionalJumpPass()
-		if !folded && !propagated && !intOptimized && !deadCode {
+		fusedBranch := c.optimizeFusedBranchPass()
+		if !folded && !propagated && !intOptimized && !deadCode && !fusedBranch {
 			break
 		}
 	}
+}
+
+// optimizeFusedBranchPass merges comparison opcodes followed by OpJumpIfFalse
+// into single fused branch super-instructions.
+func (c *Compiler) optimizeFusedBranchPass() bool {
+	if len(c.bytecode) < 6 {
+		return false
+	}
+	targets := collectJumpTargets(c.bytecode)
+	changed := false
+
+	for i := 0; i < len(c.bytecode); {
+		op := OpCode(c.bytecode[i])
+		if !isFusedBranchCandidateOp(op) {
+			i++
+			continue
+		}
+
+		// Skip any OpNop padding to find the jump instruction.
+		j := i + 1
+		for j < len(c.bytecode) && OpCode(c.bytecode[j]) == OpNop {
+			j++
+		}
+		// Fused branch candidates are 1-byte opcodes. Jumps are 5 bytes.
+		if j+5 > len(c.bytecode) {
+			i++
+			continue
+		}
+
+		jumpOp := OpCode(c.bytecode[j])
+		if !isFusedBranchJumpOp(jumpOp) {
+			i++
+			continue
+		}
+
+		// Safety: no jump target may land on the padding bytes between comparison and jump.
+		if hasTargetInRange(targets, i+1, j) {
+			i++
+			continue
+		}
+
+		fusedOp := getFusedBranchOp(op, jumpOp)
+		if fusedOp == OpHalt { // Sentinel for not foldable
+			i++
+			continue
+		}
+
+		// Read the 4-byte absolute target from the jump opcode.
+		target := binary.BigEndian.Uint32(c.bytecode[j+1 : j+5])
+
+		// Replace the comparison opcode with the fused branch opcode and its target.
+		c.bytecode[i] = byte(fusedOp)
+		binary.BigEndian.PutUint32(c.bytecode[i+1:i+5], target)
+
+		// fill every byte from i+5 through j+4 (inclusive) with OpNop.
+		for p := i + 5; p <= j+4; p++ {
+			c.bytecode[p] = byte(OpNop)
+		}
+
+		changed = true
+		i = j + 5
+	}
+	return changed
+}
+
+func isFusedBranchCandidateOp(op OpCode) bool {
+	switch op {
+	case OpEq, OpNeq, OpLt, OpGt, OpIsRef,
+		OpJSLooseEqual, OpJSLooseNotEqual, OpJSStrictEq, OpJSStrictNeq, OpJSLess, OpJSGreater:
+		return true
+	}
+	return false
+}
+
+func isFusedBranchJumpOp(op OpCode) bool {
+	return op == OpJumpIfFalse || op == OpJSJumpIfFalse
+}
+
+func getFusedBranchOp(op OpCode, jumpOp OpCode) OpCode {
+	if jumpOp == OpJumpIfFalse {
+		switch op {
+		case OpEq:
+			return OpJumpIfNotEq
+		case OpNeq:
+			return OpJumpIfEq
+		case OpLt:
+			return OpJumpIfNotLt
+		case OpGt:
+			return OpJumpIfLte
+		case OpIsRef:
+			return OpJumpIfNotIs
+		}
+	} else if jumpOp == OpJSJumpIfFalse {
+		switch op {
+		case OpJSLooseEqual:
+			return OpJSJumpIfLooseNotEq
+		case OpJSLooseNotEqual:
+			return OpJSJumpIfLooseEq
+		case OpJSStrictEq:
+			return OpJSJumpIfStrictNotEq
+		case OpJSStrictNeq:
+			return OpJSJumpIfStrictEq
+		case OpJSLess:
+			return OpJSJumpIfNotLess
+		case OpJSGreater:
+			return OpJSJumpIfLessEqual
+		}
+	}
+	return OpHalt
 }
 
 // optimizeDeadConditionalJumpPass removes unreachable true-branches for compile-time
@@ -607,7 +717,12 @@ func collectJumpTargets(bytecode []byte) map[int]struct{} {
 		ip++
 		size := opcodeOperandSize(op)
 		switch op {
-		case OpJump, OpJumpIfFalse, OpJumpIfTrue, OpGotoLabel:
+		case OpJump, OpJumpIfFalse, OpJumpIfTrue, OpGotoLabel,
+			OpJSJump, OpJSJumpIfFalse, OpJSJumpIfTrue, OpJSTryEnter,
+			OpJSJumpIfNullish, OpJSJumpIfNotNullish, OpJSJumpIfNotUndefined,
+			OpJSCase, OpJSDefault, OpJSBreak, OpJSContinue,
+			OpJumpIfNotEq, OpJumpIfEq, OpJumpIfNotLt, OpJumpIfLte, OpJumpIfNotIs,
+			OpJSJumpIfLooseNotEq, OpJSJumpIfLooseEq, OpJSJumpIfStrictNotEq, OpJSJumpIfStrictEq, OpJSJumpIfNotLess, OpJSJumpIfLessEqual:
 			// 4-byte absolute target immediately follows the opcode.
 			if ip+4 <= len(bytecode) {
 				targets[int(binary.BigEndian.Uint32(bytecode[ip:]))] = struct{}{}

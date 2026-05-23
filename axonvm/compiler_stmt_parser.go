@@ -3200,6 +3200,11 @@ func (c *Compiler) parseSubFunction(isFunc bool) {
 	if !ok {
 		nameIdx = c.Globals.Add(name)
 	}
+	// Sub/Function names must be recognized as declared identifiers so that
+	// Option Explicit does not reject forward or backward calls to them.
+	if !c.isLocal {
+		c.declaredGlobals[strings.ToLower(name)] = true
+	}
 
 	placeholder := c.addConstant(NewEmpty())
 	c.emit(OpConstant, placeholder)

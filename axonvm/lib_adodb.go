@@ -4509,6 +4509,46 @@ func adodbConnectionDebugSummary(connStr string) string {
 	return "provider=" + provider + "; data source=" + dataSource
 }
 
+// adodbAccessDataSourcePath extracts the Access database path from one
+// connection string when the provider uses a file-backed Data Source.
+func adodbAccessDataSourcePath(connStr string) string {
+	params := adodbParseConnectionStringParams(connStr)
+	dataSource := strings.TrimSpace(params["data source"])
+	if dataSource == "" {
+		dataSource = strings.TrimSpace(params["datasource"])
+	}
+	if dataSource == "" {
+		return ""
+	}
+	dataSource = strings.Trim(dataSource, `"`)
+	if strings.Contains(strings.ToLower(dataSource), "|datadirectory|") {
+		return ""
+	}
+	return filepath.Clean(dataSource)
+}
+
+// adodbAccessPreflightOpen rejects obviously invalid Access database paths
+// before invoking the OLE provider, which can otherwise block for a long time.
+func (vm *VM) adodbAccessPreflightOpen(conn *adodbConnection, connStr string) bool {
+	dataSource := adodbAccessDataSourcePath(connStr)
+	if dataSource == "" {
+		return false
+	}
+	info, err := os.Stat(dataSource)
+	if err == nil {
+		if info.IsDir() {
+			vm.adodbConnectionRaiseProviderError(conn, "ADODB.Connection.Open", "database file path points to a directory: "+dataSource, "")
+			return true
+		}
+		return false
+	}
+	if os.IsNotExist(err) {
+		vm.adodbConnectionRaiseProviderError(conn, "ADODB.Connection.Open", "database file does not exist: "+dataSource, "")
+		return true
+	}
+	return false
+}
+
 // adodbAlternateAccessProviderConnectionString swaps ACE/JET providers when an
 // Access OLE connection fails so the runtime can retry with the alternate provider.
 func adodbAlternateAccessProviderConnectionString(connStr string) (string, bool) {
@@ -4577,6 +4617,9 @@ func adodbXMLEscape(value string) string {
 func (vm *VM) adodbOpenAccessDatabase(conn *adodbConnection, connStr string) {
 	connStr = adodbNormalizeAccessConnectionString(connStr)
 	conn.connectionString = connStr
+	if vm.adodbAccessPreflightOpen(conn, connStr) {
+		return
+	}
 	err := vm.ensureCOMRequestThread()
 	if err != nil {
 		vm.raise(vbscript.InternalError,

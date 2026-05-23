@@ -1002,7 +1002,9 @@ func opcodeOperandSize(op OpCode) int {
 	case OpJump, OpJumpIfFalse, OpJumpIfTrue, OpGotoLabel, OpSet,
 		OpJSJump, OpJSJumpIfFalse, OpJSJumpIfTrue, OpJSTryEnter,
 		OpJSJumpIfNullish, OpJSJumpIfNotNullish, OpJSJumpIfNotUndefined,
-		OpJSCase, OpJSDefault, OpJSBreak, OpJSContinue, OpJSForInCleanup, OpJSForOfCleanup:
+		OpJSCase, OpJSDefault, OpJSBreak, OpJSContinue, OpJSForInCleanup, OpJSForOfCleanup,
+		OpJumpIfNotEq, OpJumpIfEq, OpJumpIfNotLt, OpJumpIfLte, OpJumpIfNotIs,
+		OpJSJumpIfLooseNotEq, OpJSJumpIfLooseEq, OpJSJumpIfStrictNotEq, OpJSJumpIfStrictEq, OpJSJumpIfNotLess, OpJSJumpIfLessEqual:
 		return 4
 	case OpForNextFastInt, OpForNextFastGlobalInt:
 		return 9
@@ -1080,7 +1082,8 @@ func remapExecuteGlobalBytecode(bytecode []byte, constBase int, bytecodeBase int
 			ext := ExtOpCode(bytecode[ip])
 			ip++
 			switch ext {
-			case ExtOpInitRecord, ExtOpGetRecordMember, ExtOpSetRecordMember:
+			case ExtOpInitRecord, ExtOpGetRecordMember, ExtOpSetRecordMember,
+				ExtOpAxonASP, ExtOpJSMathSin, ExtOpJSMathCos, ExtOpJSMathTan, ExtOpJSMathAbs, ExtOpJSMathFloor, ExtOpJSMathCeil, ExtOpJSMathRound, ExtOpJSMathSqrt, ExtOpJSMathMin, ExtOpJSMathMax:
 				ip += 2
 			default:
 				panic("unsupported extended opcode in remapExecuteGlobalBytecode")
@@ -1092,7 +1095,9 @@ func remapExecuteGlobalBytecode(bytecode []byte, constBase int, bytecodeBase int
 			binary.BigEndian.PutUint16(bytecode[ip:], uint16(nameIdx))
 			ip += 4
 		case OpJump, OpJumpIfFalse, OpJumpIfTrue, OpGotoLabel, OpJSJump, OpJSJumpIfFalse, OpJSJumpIfTrue, OpJSTryEnter, OpJSCase, OpJSDefault, OpJSBreak, OpJSContinue, OpJSForInCleanup, OpJSForOfCleanup,
-			OpJSJumpIfNullish, OpJSJumpIfNotNullish, OpJSJumpIfNotUndefined:
+			OpJSJumpIfNullish, OpJSJumpIfNotNullish, OpJSJumpIfNotUndefined,
+			OpJumpIfNotEq, OpJumpIfEq, OpJumpIfNotLt, OpJumpIfLte, OpJumpIfNotIs,
+			OpJSJumpIfLooseNotEq, OpJSJumpIfLooseEq, OpJSJumpIfStrictNotEq, OpJSJumpIfStrictEq, OpJSJumpIfNotLess, OpJSJumpIfLessEqual:
 			target := int(binary.BigEndian.Uint32(bytecode[ip:])) + bytecodeBase
 			binary.BigEndian.PutUint32(bytecode[ip:], uint32(target))
 			ip += 4
@@ -1927,10 +1932,6 @@ aspExecLoop:
 			}
 			vm.push(v)
 
-		case OpAxonASP:
-			// Push the AxonASP VBScript engine identification string.
-			vm.push(NewString("G3pix AxonASP VBScript Engine"))
-
 		case OpGetLocal:
 			offset := binary.BigEndian.Uint16(vm.bytecode[vm.ip:])
 			vm.ip += 2
@@ -2518,6 +2519,116 @@ aspExecLoop:
 				vm.ip = int(target)
 			}
 
+		case OpJumpIfNotEq:
+			target := int(binary.BigEndian.Uint32(vm.bytecode[vm.ip:]))
+			vm.ip += 4
+			b, a := vm.pop(), vm.pop()
+			var eq bool
+			if isNull(a) || isNull(b) {
+				eq = false
+			} else if vm.optionCompare == 1 {
+				eq = strings.EqualFold(a.String(), b.String())
+			} else {
+				eq = vm.compareValues(a, b) == 0
+			}
+			if !eq {
+				vm.ip = target
+			}
+
+		case OpJumpIfEq:
+			target := int(binary.BigEndian.Uint32(vm.bytecode[vm.ip:]))
+			vm.ip += 4
+			b, a := vm.pop(), vm.pop()
+			var neq bool
+			if isNull(a) || isNull(b) {
+				neq = false
+			} else if vm.optionCompare == 1 {
+				neq = !strings.EqualFold(a.String(), b.String())
+			} else {
+				neq = vm.compareValues(a, b) != 0
+			}
+			if !neq {
+				vm.ip = target
+			}
+
+		case OpJumpIfNotLt:
+			target := int(binary.BigEndian.Uint32(vm.bytecode[vm.ip:]))
+			vm.ip += 4
+			b, a := vm.pop(), vm.pop()
+			if isNull(a) || isNull(b) || !(vm.asFloat(a) < vm.asFloat(b)) {
+				vm.ip = target
+			}
+
+		case OpJumpIfLte:
+			target := int(binary.BigEndian.Uint32(vm.bytecode[vm.ip:]))
+			vm.ip += 4
+			b, a := vm.pop(), vm.pop()
+			// Fuses OpGt + OpJumpIfFalse -> Jump if !(a > b) -> Jump if a <= b
+			if isNull(a) || isNull(b) || (vm.asFloat(a) <= vm.asFloat(b)) {
+				vm.ip = target
+			}
+
+		case OpJumpIfNotIs:
+			target := int(binary.BigEndian.Uint32(vm.bytecode[vm.ip:]))
+			vm.ip += 4
+			b, a := vm.pop(), vm.pop()
+			if !IsObjectReferenceValue(a) || !IsObjectReferenceValue(b) {
+				vm.raise(vbscript.TypeMismatch, vbscript.TypeMismatch.String())
+				vm.ip = target
+				continue
+			}
+			if a.Type != b.Type || a.Num != b.Num {
+				vm.ip = target
+			}
+
+		case OpJSJumpIfLooseNotEq:
+			target := int(binary.BigEndian.Uint32(vm.bytecode[vm.ip:]))
+			vm.ip += 4
+			b, a := vm.pop(), vm.pop()
+			if !vm.isTruthy(vm.jsLooseEqual(a, b)) {
+				vm.ip = target
+			}
+
+		case OpJSJumpIfLooseEq:
+			target := int(binary.BigEndian.Uint32(vm.bytecode[vm.ip:]))
+			vm.ip += 4
+			b, a := vm.pop(), vm.pop()
+			if !vm.isTruthy(vm.jsLooseNotEqual(a, b)) {
+				vm.ip = target
+			}
+
+		case OpJSJumpIfStrictNotEq:
+			target := int(binary.BigEndian.Uint32(vm.bytecode[vm.ip:]))
+			vm.ip += 4
+			b, a := vm.pop(), vm.pop()
+			if !vm.jsStrictEquals(a, b) {
+				vm.ip = target
+			}
+
+		case OpJSJumpIfStrictEq:
+			target := int(binary.BigEndian.Uint32(vm.bytecode[vm.ip:]))
+			vm.ip += 4
+			b, a := vm.pop(), vm.pop()
+			if vm.jsStrictEquals(a, b) {
+				vm.ip = target
+			}
+
+		case OpJSJumpIfNotLess:
+			target := int(binary.BigEndian.Uint32(vm.bytecode[vm.ip:]))
+			vm.ip += 4
+			b, a := vm.pop(), vm.pop()
+			if !vm.isTruthy(vm.jsLess(a, b)) {
+				vm.ip = target
+			}
+
+		case OpJSJumpIfLessEqual:
+			target := int(binary.BigEndian.Uint32(vm.bytecode[vm.ip:]))
+			vm.ip += 4
+			b, a := vm.pop(), vm.pop()
+			if !vm.isTruthy(vm.jsGreater(a, b)) {
+				vm.ip = target
+			}
+
 		case OpSetDirective:
 			nameIdx := binary.BigEndian.Uint16(vm.bytecode[vm.ip:])
 			vm.ip += 2
@@ -2945,6 +3056,64 @@ aspExecLoop:
 					continue
 				}
 				recVal.Rec.Members[memberIdx] = rhs
+
+			case ExtOpAxonASP:
+				vm.ip += 2
+				// Push the AxonASP VBScript engine identification string.
+				vm.push(NewString("G3pix AxonASP VBScript Engine"))
+
+			case ExtOpJSMathSin:
+				vm.ip += 2
+				vm.push(NewDouble(math.Sin(vm.jsToNumber(vm.pop()).Flt)))
+
+			case ExtOpJSMathCos:
+				vm.ip += 2
+				vm.push(NewDouble(math.Cos(vm.jsToNumber(vm.pop()).Flt)))
+
+			case ExtOpJSMathTan:
+				vm.ip += 2
+				vm.push(NewDouble(math.Tan(vm.jsToNumber(vm.pop()).Flt)))
+
+			case ExtOpJSMathAbs:
+				vm.ip += 2
+				v := vm.pop()
+				if v.Type == VTInteger {
+					if v.Num < 0 {
+						vm.push(NewInteger(-v.Num))
+					} else {
+						vm.push(v)
+					}
+				} else {
+					vm.push(NewDouble(math.Abs(vm.jsToNumber(v).Flt)))
+				}
+
+			case ExtOpJSMathFloor:
+				vm.ip += 2
+				vm.push(NewDouble(math.Floor(vm.jsToNumber(vm.pop()).Flt)))
+
+			case ExtOpJSMathCeil:
+				vm.ip += 2
+				vm.push(NewDouble(math.Ceil(vm.jsToNumber(vm.pop()).Flt)))
+
+			case ExtOpJSMathRound:
+				vm.ip += 2
+				vm.push(NewDouble(math.Round(vm.jsToNumber(vm.pop()).Flt)))
+
+			case ExtOpJSMathSqrt:
+				vm.ip += 2
+				vm.push(NewDouble(math.Sqrt(vm.jsToNumber(vm.pop()).Flt)))
+
+			case ExtOpJSMathMin:
+				vm.ip += 2
+				b := vm.jsToNumber(vm.pop()).Flt
+				a := vm.jsToNumber(vm.pop()).Flt
+				vm.push(NewDouble(math.Min(a, b)))
+
+			case ExtOpJSMathMax:
+				vm.ip += 2
+				b := vm.jsToNumber(vm.pop()).Flt
+				a := vm.jsToNumber(vm.pop()).Flt
+				vm.push(NewDouble(math.Max(a, b)))
 
 			default:
 				vm.raise(vbscript.InternalError, "Unsupported extended opcode")
@@ -3839,49 +4008,6 @@ aspExecLoop:
 
 		case OpJSPop:
 			vm.pop()
-
-		case OpJSMathSin:
-			vm.push(NewDouble(math.Sin(vm.jsToNumber(vm.pop()).Flt)))
-
-		case OpJSMathCos:
-			vm.push(NewDouble(math.Cos(vm.jsToNumber(vm.pop()).Flt)))
-
-		case OpJSMathTan:
-			vm.push(NewDouble(math.Tan(vm.jsToNumber(vm.pop()).Flt)))
-
-		case OpJSMathAbs:
-			v := vm.pop()
-			if v.Type == VTInteger {
-				if v.Num < 0 {
-					vm.push(NewInteger(-v.Num))
-				} else {
-					vm.push(v)
-				}
-			} else {
-				vm.push(NewDouble(math.Abs(vm.jsToNumber(v).Flt)))
-			}
-
-		case OpJSMathFloor:
-			vm.push(NewDouble(math.Floor(vm.jsToNumber(vm.pop()).Flt)))
-
-		case OpJSMathCeil:
-			vm.push(NewDouble(math.Ceil(vm.jsToNumber(vm.pop()).Flt)))
-
-		case OpJSMathRound:
-			vm.push(NewDouble(math.Round(vm.jsToNumber(vm.pop()).Flt)))
-
-		case OpJSMathSqrt:
-			vm.push(NewDouble(math.Sqrt(vm.jsToNumber(vm.pop()).Flt)))
-
-		case OpJSMathMin:
-			b := vm.jsToNumber(vm.pop()).Flt
-			a := vm.jsToNumber(vm.pop()).Flt
-			vm.push(NewDouble(math.Min(a, b)))
-
-		case OpJSMathMax:
-			b := vm.jsToNumber(vm.pop()).Flt
-			a := vm.jsToNumber(vm.pop()).Flt
-			vm.push(NewDouble(math.Max(a, b)))
 
 		case OpJSRot:
 			n := int(binary.BigEndian.Uint16(vm.bytecode[vm.ip:]))

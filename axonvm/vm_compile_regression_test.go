@@ -8065,3 +8065,157 @@ Response.Write a & "|" & b
 		t.Fatalf("expected %q, got %q", expected, got)
 	}
 }
+
+// TestOptionExplicitSubCallNotMistokenAsVariable verifies that a global Sub name
+// is accepted as a valid call target under Option Explicit and is not rejected
+// as an undeclared variable.
+func TestOptionExplicitSubCallNotMistokenAsVariable(t *testing.T) {
+	source := `<%
+Option Explicit
+
+Dim mode
+mode = "html"
+
+If mode = "html" Then
+    Call RenderPage()
+End If
+
+Sub RenderPage()
+    Response.Write "rendered"
+End Sub
+%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVMFromCompiler(compiler)
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	if got := output.String(); got != "rendered" {
+		t.Fatalf("expected %q, got %q", "rendered", got)
+	}
+}
+
+// TestOptionExplicitPrivateFunctionCallNotMistokenAsVariable verifies that a
+// private Function declared after its call site compiles correctly under
+// Option Explicit and is not rejected as an undeclared variable.
+func TestOptionExplicitPrivateFunctionCallNotMistokenAsVariable(t *testing.T) {
+	source := `<%
+Option Explicit
+
+Dim result
+result = GetValue()
+Response.Write result
+
+Private Function GetValue()
+    GetValue = "ok"
+End Function
+%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVMFromCompiler(compiler)
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	if got := output.String(); got != "ok" {
+		t.Fatalf("expected %q, got %q", "ok", got)
+	}
+}
+
+// TestOptionExplicitSubCallAfterDeclaration verifies that a Sub declared before
+// its call site compiles and runs correctly under Option Explicit.
+func TestOptionExplicitSubCallAfterDeclaration(t *testing.T) {
+	source := `<%
+Option Explicit
+
+Sub AssertEqual(testName, actual, expected)
+    If actual = expected Then
+        Response.Write "PASS|" & testName & vbCrLf
+    Else
+        Response.Write "FAIL|" & testName & "|expected=" & expected & "|actual=" & actual & vbCrLf
+    End If
+End Sub
+
+Call AssertEqual("test1", 1 + 1, 2)
+Call AssertEqual("test2", "hello", "hello")
+%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVMFromCompiler(compiler)
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	got := output.String()
+	if !strings.Contains(got, "PASS|test1") || !strings.Contains(got, "PASS|test2") {
+		t.Fatalf("unexpected output: %q", got)
+	}
+}
+
+// TestOptionExplicitFunctionUsedAsExpressionRHS verifies that a zero-arg Function
+// name used on the RHS of an assignment does not trigger "Variable not defined"
+// under Option Explicit.
+func TestOptionExplicitFunctionUsedAsExpressionRHS(t *testing.T) {
+	source := `<%
+Option Explicit
+
+Dim s
+s = StreamReader()
+Response.Write s
+
+Function StreamReader()
+    StreamReader = "data"
+End Function
+%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVMFromCompiler(compiler)
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	if got := output.String(); got != "data" {
+		t.Fatalf("expected %q, got %q", "data", got)
+	}
+}

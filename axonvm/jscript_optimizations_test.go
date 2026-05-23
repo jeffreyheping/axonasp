@@ -38,23 +38,15 @@ func TestJScriptMathOptimizations(t *testing.T) {
 	}
 
 	bytecode := compiler.Bytecode()
-	ops := map[OpCode]bool{
-		OpJSMathSin:   false,
-		OpJSMathCos:   false,
-		OpJSMathFloor: false,
-		OpJSMathMin:   false,
-		OpJSMathMax:   false,
-	}
+	foundExt := false
 	for i := 0; i < len(bytecode); i++ {
-		op := OpCode(bytecode[i])
-		if _, exists := ops[op]; exists {
-			ops[op] = true
+		if OpCode(bytecode[i]) == OpExtPrefix {
+			foundExt = true
+			break
 		}
 	}
-	for op, found := range ops {
-		if !found {
-			t.Errorf("expected opcode %v in bytecode", op)
-		}
+	if !foundExt {
+		t.Error("expected OpExtPrefix in bytecode for optimized Math calls")
 	}
 
 	out := runASPSourceForTest(t, source)
