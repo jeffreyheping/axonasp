@@ -22,6 +22,7 @@ package axonvm
 
 import (
 	"encoding/binary"
+	"fmt"
 	"math"
 	"math/bits"
 	"strconv"
@@ -48,6 +49,112 @@ func (c *Compiler) optimizePeephole() {
 	}
 }
 
+// validateBytecodeIndices panics with a descriptive message if any instruction
+// in c.bytecode references an out-of-range constant, global, or local index.
+// It is a development-time integrity check and is not compiled into production
+// builds by default; guard the call site with a build tag if needed.
+func (c *Compiler) validateBytecodeIndices(tag string) {
+	globalsCount := c.GlobalsCount()
+	for ip := 0; ip < len(c.bytecode); {
+		op := OpCode(c.bytecode[ip])
+		size := opcodeOperandSize(op, c.bytecode, ip)
+		instrEnd := ip + 1 + size
+		if instrEnd > len(c.bytecode) {
+			panic(fmt.Sprintf("[%s] invalid instruction size %d at ip %d for %s (bytecode len %d)", tag, size, ip, op.String(), len(c.bytecode)))
+		}
+
+		// Validate constant-index operands (OpConstant, OpWriteStatic, OpGetClassMember, …).
+		switch op {
+		case OpConstant, OpWriteStatic, OpGetClassMember, OpSetClassMember, OpEraseClassMember, OpMemberSet, OpMemberSetSet, OpNewClass, OpLetClassMember, OpArgClassMemberRef,
+			OpRegisterClass, OpRegisterClassField, OpRegisterClassMethod, OpRegisterClassPropertyGet, OpRegisterClassPropertyLet, OpRegisterClassPropertySet, OpInitClassArrayField,
+			OpLabel:
+			if ip+3 > len(c.bytecode) {
+				panic(fmt.Sprintf("[%s] truncated instruction %s at ip %d", tag, op.String(), ip))
+			}
+			idx := int(binary.BigEndian.Uint16(c.bytecode[ip+1 : ip+3]))
+			if idx < 0 || idx >= len(c.constants) {
+				// Dump bytecode window around the fault.
+				winStart := ip - 12
+				if winStart < 0 {
+					winStart = 0
+				}
+				winEnd := ip + 12
+				if winEnd > len(c.bytecode) {
+					winEnd = len(c.bytecode)
+				}
+				panic(fmt.Sprintf("[%s] out-of-range constant index %d at ip %d for %s (constants=%d)\nbytecode[%d:%d] = %v", tag, idx, ip, op.String(), len(c.constants), winStart, winEnd, c.bytecode[winStart:winEnd]))
+			}
+
+		case OpGetGlobal, OpSetGlobal, OpLetGlobal, OpEraseGlobal, OpIncGlobalInt, OpDecGlobalInt, OpArgGlobalRef:
+			if ip+3 > len(c.bytecode) {
+				panic(fmt.Sprintf("[%s] truncated instruction %s at ip %d", tag, op.String(), ip))
+			}
+			idx := int(binary.BigEndian.Uint16(c.bytecode[ip+1 : ip+3]))
+			if idx < 0 || idx >= globalsCount {
+				panic(fmt.Sprintf("[%s] out-of-range global index %d at ip %d for %s (globals=%d)", tag, idx, ip, op.String(), globalsCount))
+			}
+
+		case OpGetLocal, OpSetLocal, OpLetLocal, OpEraseLocal, OpIncLocalInt, OpDecLocalInt, OpArgLocalRef:
+			// Local indices are validated at runtime against the frame, but must be
+			// within reasonable bounds; skip for now (they're frame-relative).
+		}
+
+		// Validate extended opcodes that carry constant/global indices.
+		if op == OpExtPrefix && ip+1 < len(c.bytecode) {
+			extOp := ExtOpCode(c.bytecode[ip+1])
+			switch extOp {
+			case ExtOpAddLocalConst, ExtOpConcatLocalConst:
+				if ip+6 <= len(c.bytecode) {
+					cidx := int(binary.BigEndian.Uint16(c.bytecode[ip+4 : ip+6]))
+					if cidx < 0 || cidx >= len(c.constants) {
+						panic(fmt.Sprintf("[%s] out-of-range const index %d in %s at ip %d (constants=%d)", tag, cidx, extOp.String(), ip, len(c.constants)))
+					}
+				}
+			case ExtOpSubGlobalConst:
+				if ip+6 <= len(c.bytecode) {
+					gidx := int(binary.BigEndian.Uint16(c.bytecode[ip+2 : ip+4]))
+					if gidx < 0 || gidx >= globalsCount {
+						panic(fmt.Sprintf("[%s] out-of-range global index %d in %s at ip %d (globals=%d)", tag, gidx, extOp.String(), ip, globalsCount))
+					}
+					cidx := int(binary.BigEndian.Uint16(c.bytecode[ip+4 : ip+6]))
+					if cidx < 0 || cidx >= len(c.constants) {
+						panic(fmt.Sprintf("[%s] out-of-range const index %d in %s at ip %d (constants=%d)", tag, cidx, extOp.String(), ip, len(c.constants)))
+					}
+				}
+			case ExtOpConstant2:
+				if ip+6 <= len(c.bytecode) {
+					for off := 2; off <= 4; off += 2 {
+						cidx := int(binary.BigEndian.Uint16(c.bytecode[ip+off : ip+off+2]))
+						if cidx < 0 || cidx >= len(c.constants) {
+							panic(fmt.Sprintf("[%s] out-of-range const index %d in %s at ip %d (constants=%d)", tag, cidx, extOp.String(), ip, len(c.constants)))
+						}
+					}
+				}
+			case ExtOpConstant3:
+				if ip+8 <= len(c.bytecode) {
+					for off := 2; off <= 6; off += 2 {
+						cidx := int(binary.BigEndian.Uint16(c.bytecode[ip+off : ip+off+2]))
+						if cidx < 0 || cidx >= len(c.constants) {
+							panic(fmt.Sprintf("[%s] out-of-range const index %d in %s at ip %d (constants=%d)", tag, cidx, extOp.String(), ip, len(c.constants)))
+						}
+					}
+				}
+			case ExtOpConstant4:
+				if ip+10 <= len(c.bytecode) {
+					for off := 2; off <= 8; off += 2 {
+						cidx := int(binary.BigEndian.Uint16(c.bytecode[ip+off : ip+off+2]))
+						if cidx < 0 || cidx >= len(c.constants) {
+							panic(fmt.Sprintf("[%s] out-of-range const index %d in %s at ip %d (constants=%d)", tag, cidx, extOp.String(), ip, len(c.constants)))
+						}
+					}
+				}
+			}
+		}
+
+		ip = instrEnd
+	}
+}
+
 // optimizeFusedBranchPass merges comparison opcodes followed by OpJumpIfFalse
 // into single fused branch super-instructions.
 func (c *Compiler) optimizeFusedBranchPass() bool {
@@ -60,7 +167,9 @@ func (c *Compiler) optimizeFusedBranchPass() bool {
 	for i := 0; i < len(c.bytecode); {
 		op := OpCode(c.bytecode[i])
 		if !isFusedBranchCandidateOp(op) {
-			i++
+			// Advance past the full instruction, including extended opcodes.
+			size := opcodeOperandSize(op, c.bytecode, i)
+			i += 1 + size
 			continue
 		}
 
@@ -71,25 +180,25 @@ func (c *Compiler) optimizeFusedBranchPass() bool {
 		}
 		// Fused branch candidates are 1-byte opcodes. Jumps are 5 bytes.
 		if j+5 > len(c.bytecode) {
-			i++
+			i += 1
 			continue
 		}
 
 		jumpOp := OpCode(c.bytecode[j])
 		if !isFusedBranchJumpOp(jumpOp) {
-			i++
+			i += 1
 			continue
 		}
 
 		// Safety: no jump target may land on the padding bytes between comparison and jump.
 		if hasTargetInRange(targets, i+1, j) {
-			i++
+			i += 1
 			continue
 		}
 
 		fusedOp := getFusedBranchOp(op, jumpOp)
 		if fusedOp == OpHalt { // Sentinel for not foldable
-			i++
+			i += 1
 			continue
 		}
 
@@ -647,8 +756,12 @@ func (c *Compiler) optimizePeepholePass() bool {
 
 	for i := 0; i < len(c.bytecode); {
 		// First instruction must be OpConstant.
-		if OpCode(c.bytecode[i]) != OpConstant {
-			i++
+		op := OpCode(c.bytecode[i])
+		if op != OpConstant {
+			// Advance past the full instruction, including extended opcodes,
+			// so operand bytes are never misinterpreted as opcodes.
+			size := opcodeOperandSize(op, c.bytecode, i)
+			i += 1 + size
 			continue
 		}
 

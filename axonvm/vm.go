@@ -1025,6 +1025,7 @@ func opcodeOperandSize(op OpCode, bytecode []byte, ip int) int {
 		OpJSPostMemberIncrement, OpJSPostMemberDecrement, OpJSPreMemberIncrement, OpJSPreMemberDecrement,
 		OpJSLetDeclare, OpJSTDZRegisterLet, OpJSTDZRegisterConst, OpJSConstInitialize, OpJSRot,
 		OpJSIncLocalInt, OpJSDecLocalInt,
+		OpIncLocalInt, OpDecLocalInt, OpIncGlobalInt, OpDecGlobalInt,
 		OpJSSuperMemberGet, OpJSSuperMemberSet, OpJSSuperCallComputedMember,
 		OpJSExportAll:
 		return 2
@@ -1374,7 +1375,7 @@ func remapExecuteGlobalBytecode(bytecode []byte, constBase int, bytecodeBase int
 			ip += 4
 		default:
 			// Keep scan aligned for opcodes that do not need remapping but still carry operands.
-			ip += opcodeOperandSize(op, bytecode, ip)
+			ip += opcodeOperandSize(op, bytecode, ip-1)
 		}
 	}
 }
@@ -1792,7 +1793,11 @@ func (vm *VM) Run() (err error) {
 					err = vme
 				}
 			} else if re, ok := r.(error); ok {
-				err = fmt.Errorf("%w\n%s", re, debug.Stack())
+				nextOp := "<out-of-range>"
+				if vm.ip >= 0 && vm.ip < len(vm.bytecode) {
+					nextOp = OpCode(vm.bytecode[vm.ip]).String()
+				}
+				err = fmt.Errorf("%w\nVM context: ip=%d, nextOp=%s, lastLine=%d, bytecodeLen=%d, globalsLen=%d, constantsLen=%d\n%s", re, vm.ip, nextOp, vm.lastLine, len(vm.bytecode), len(vm.Globals), len(vm.constants), debug.Stack())
 			} else {
 				if vm.onResumeNext {
 					err = nil
