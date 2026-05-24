@@ -88,6 +88,7 @@ var (
 		"next":       KeywordNext,
 		"not":        KeywordNot,
 		"on":         KeywordOn,
+		"open":       KeywordOpen,
 		"option":     KeywordOption,
 		"or":         KeywordOr,
 		"preserve":   KeywordPreserve,
@@ -113,18 +114,28 @@ var (
 
 	// keywordAsIdentifiers maps keyword-like strings that can also be used as identifiers
 	keywordAsIdentifiers = map[string]Keyword{
+		"append":     KeywordAppend,
+		"as":         KeywordAs,
+		"base":       KeywordBase,
 		"binary":     KeywordBinary,
+		"close":      KeywordClose,
 		"compare":    KeywordCompare,
 		"default":    KeywordDefault,
 		"erase":      KeywordErase,
 		"error":      KeywordError,
 		"explicit":   KeywordExplicit,
+		"freefile":   KeywordFreeFile,
+		"input":      KeywordInput,
+		"line":       KeywordLine,
 		"optional":   KeywordOptional,
+		"output":     KeywordOutput,
 		"paramarray": KeywordParamArray,
-		"base":       KeywordBase,
+		"print":      KeywordPrint,
 		"property":   KeywordProperty,
+		"put":        KeywordPut,
 		"step":       KeywordStep,
 		"text":       KeywordText,
+		"write":      KeywordWrite,
 	}
 )
 

@@ -488,12 +488,26 @@ func (l *Lexer) nextDateLiteral() Token {
 	}
 
 	if l.getChar(l.Index) != '#' || l.sb.Len() == 0 {
-		panic(l.vbSyntaxError(SyntaxError))
+		// Not a date literal, return PunctHash
+		l.Index = start + 1
+		return &PunctuationToken{
+			BaseToken: BaseToken{
+				Start:      start,
+				End:        l.Index,
+				LineNumber: l.CurrentLine,
+				LineStart:  l.CurrentLineStart,
+			},
+			Type: PunctHash,
+		}
 	}
 
 	dateStr := strings.TrimSpace(l.sb.String())
 	date, err := GetDate(dateStr)
 	if err != nil {
+		// If it looks like a date literal but parsing fails, we could return it as a string or error,
+		// but for VB6 file compatibility, if it's # followed by digits it's likely a file number.
+		// However, standard VBScript expects a valid date between ##.
+		// For now, let's treat it as an error if it's truly ## but invalid.
 		panic(l.vbSyntaxError(SyntaxError))
 	}
 
@@ -1943,6 +1957,9 @@ func (l *Lexer) nextPunctuation() Token {
 		punctType = &p
 	case '^':
 		p := PunctExp
+		punctType = &p
+	case '#':
+		p := PunctHash
 		punctType = &p
 	case '=':
 		if next == '<' {

@@ -575,6 +575,16 @@ const (
 	ExtOpConstant2 // [OpExtPrefix, ExtOpConstant2, Const1High, Const1Low, Const2High, Const2Low]
 	ExtOpConstant3 // [OpExtPrefix, ExtOpConstant3, Const1High, Const1Low, Const2High, Const2Low, Const3High, Const3Low]
 	ExtOpConstant4 // [OpExtPrefix, ExtOpConstant4, Const1High, Const1Low, Const2High, Const2Low, Const3High, Const3Low, Const4High, Const4Low]
+
+	// Phase 3: File I/O
+	ExtOpFileOpen      // [OpExtPrefix, ExtOpFileOpen] (path, mode, num on stack)
+	ExtOpFileClose     // [OpExtPrefix, ExtOpFileClose] (num on stack)
+	ExtOpFilePrint     // [OpExtPrefix, ExtOpFilePrint, ArgCountH, ArgCountL] (num, arg1..argN on stack)
+	ExtOpFileWrite     // [OpExtPrefix, ExtOpFileWrite, ArgCountH, ArgCountL] (num, arg1..argN on stack)
+	ExtOpFileLineInput // [OpExtPrefix, ExtOpFileLineInput] (num on stack)
+	ExtOpFilePut       // [OpExtPrefix, ExtOpFilePut] (num, pos, value on stack)
+	ExtOpFileGet       // [OpExtPrefix, ExtOpFileGet] (num, pos on stack)
+	ExtOpFileFreeFile  // [OpExtPrefix, ExtOpFileFreeFile] (pushes result to stack)
 )
 
 func (op OpCode) String() string {
@@ -1106,6 +1116,22 @@ func (op ExtOpCode) String() string {
 		return "ExtOpConstant3"
 	case ExtOpConstant4:
 		return "ExtOpConstant4"
+	case ExtOpFileOpen:
+		return "ExtOpFileOpen"
+	case ExtOpFileClose:
+		return "ExtOpFileClose"
+	case ExtOpFilePrint:
+		return "ExtOpFilePrint"
+	case ExtOpFileWrite:
+		return "ExtOpFileWrite"
+	case ExtOpFileLineInput:
+		return "ExtOpFileLineInput"
+	case ExtOpFilePut:
+		return "ExtOpFilePut"
+	case ExtOpFileGet:
+		return "ExtOpFileGet"
+	case ExtOpFileFreeFile:
+		return "ExtOpFileFreeFile"
 	default:
 		return "ExtOpUnknown"
 	}

@@ -1,4 +1,4 @@
-﻿# AxonASP Documentation
+# AxonASP Documentation
 
 * AxonASP
     * [Welcome](md/axonasp/welcome.md)
@@ -60,6 +60,7 @@
     * [Advanced Procedure Signatures](md/asp-modernization/advanced-procedure-signatures.md)
     * [Event Orientation (Event, RaiseEvent, WithEvents)](md/asp-modernization/event-orientation.md)
     * [Interface Polymorphism (Implements)](md/asp-modernization/interface-polymorphism.md)
+    * [Native File I/O (Open, Print, Close)](md/asp-modernization/native-file-io.md)
 * Javascript support (JScript)
     * [Use Javascript in ASP Pages](md/javascript/jscript-support.md)
     * [ES6 Features and Beyond](md/javascript/jscript-es6-support.md)
@@ -688,17 +689,17 @@
             * [Field.Attributes](md/libraries/adodb/properties/field.attributes.md)
             * [Field.NumericScale](md/libraries/adodb/properties/field.numericscale.md)
             * [Field.ActualSize](md/libraries/adodb/properties/field.actualsize.md)
-            * [Field.DataFormat](md/libraries/adodb/properties/field.dataformat.md)
+            * [Field.DataFormat](md/libraries/dataformat.md)
             * [Field.OriginalValue](md/libraries/adodb/properties/field.originalvalue.md)
             * [Field.Precision](md/libraries/adodb/properties/field.precision.md)
             * [Field.Status](md/libraries/adodb/properties/field.status.md)
             * [Field.UnderlyingValue](md/libraries/adodb/properties/field.underlyingvalue.md)
-            * [Errors.Count](md/libraries/adodb/properties/errors.count.md)
-            * [Errors.Item](md/libraries/adodb/properties/errors.item.md)
-            * [Fields.Count](md/libraries/adodb/properties/fields.count.md)
-            * [Fields.Item](md/libraries/adodb/properties/fields.item.md)
-            * [Parameters.Count](md/libraries/adodb/properties/parameters.count.md)
-            * [Parameters.Item](md/libraries/adodb/properties/parameters.item.md)
+            * [Errors.Count](md/libraries/adodb/methods/errors.count.md)
+            * [Errors.Item](md/libraries/adodb/methods/errors.item.md)
+            * [Fields.Count](md/libraries/adodb/methods/fields.count.md)
+            * [Fields.Item](md/libraries/adodb/methods/fields.item.md)
+            * [Parameters.Count](md/libraries/adodb/methods/parameters.count.md)
+            * [Parameters.Item](md/libraries/adodb/methods/parameters.item.md)
     * ADODB.STREAM
         * [Overview](md/libraries/adodb-stream/overview.md)
         * [Methods](md/libraries/adodb-stream/methods.md)

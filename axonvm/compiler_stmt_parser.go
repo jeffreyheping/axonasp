@@ -346,6 +346,28 @@ func (c *Compiler) parseStatement() {
 			// Parse the callee (function/subroutine name or member access)
 			c.parseExpression(PrecNone)
 			c.emit(OpPop)
+		case vbscript.KeywordOpen:
+			c.parseOpenStatement()
+		case vbscript.KeywordPrint:
+			c.parsePrintStatement()
+		case vbscript.KeywordWrite:
+			c.parseWriteStatement()
+		case vbscript.KeywordLine:
+			c.move()
+			if c.matchKeywordOrIdentifier(vbscript.KeywordInput, "input") {
+				c.move()
+				c.parseLineInputStatement()
+			} else {
+				panic(c.vbCompileError(vbscript.ExpectedIdentifier, "Expected 'Input' after 'Line'"))
+			}
+		case vbscript.KeywordInput:
+			c.parseInputStatement()
+		case vbscript.KeywordClose:
+			c.parseCloseStatement()
+		case vbscript.KeywordPut:
+			c.parsePutStatement()
+		case vbscript.KeywordGet:
+			c.parseGetStatement()
 		default:
 			c.parseExpression(PrecNone)
 			c.emit(OpPop)
@@ -392,6 +414,40 @@ func (c *Compiler) parseStatement() {
 
 		if strings.EqualFold(name, "Erase") {
 			c.parseEraseStatementAfterNameToken()
+			return
+		}
+
+		if strings.EqualFold(name, "Print") {
+			c.parsePrintStatementAfterPrint()
+			return
+		}
+		if strings.EqualFold(name, "Write") {
+			c.parseWriteStatementAfterWrite()
+			return
+		}
+		if strings.EqualFold(name, "Close") {
+			c.parseCloseStatementAfterClose()
+			return
+		}
+		if strings.EqualFold(name, "Input") {
+			c.parseInputStatementAfterInput()
+			return
+		}
+		if strings.EqualFold(name, "Line") {
+			if c.matchKeywordOrIdentifier(vbscript.KeywordInput, "input") {
+				c.move()
+				c.parseLineInputStatement()
+			} else {
+				panic(c.vbCompileError(vbscript.ExpectedIdentifier, "Expected 'Input' after 'Line'"))
+			}
+			return
+		}
+		if strings.EqualFold(name, "Put") {
+			c.parsePutStatementAfterPut()
+			return
+		}
+		if strings.EqualFold(name, "Get") {
+			c.parseGetStatementAfterGet()
 			return
 		}
 
@@ -2134,19 +2190,8 @@ func vb6TypeNameToValueType(name string) (ValueType, bool) {
 }
 
 // matchAsKeyword checks whether the next token is the "As" keyword (case-insensitive).
-// "As" is not a reserved keyword in standard VBScript, so we check by name.
 func (c *Compiler) matchAsKeyword() bool {
-	if c.next == nil {
-		return false
-	}
-	switch t := c.next.(type) {
-	case *vbscript.IdentifierToken:
-		return strings.EqualFold(t.Name, "as")
-	case *vbscript.KeywordOrIdentifierToken:
-		return strings.EqualFold(t.Name, "as")
-	default:
-		return false
-	}
+	return c.matchKeywordOrIdentifier(vbscript.KeywordAs, "as")
 }
 
 // parseAsTypeClause checks for an optional "As Type" clause and returns the declared type and UDT/Class name if applicable.
@@ -3460,6 +3505,13 @@ func (c *Compiler) matchKeywordOrIdentifier(kw vbscript.Keyword, text string) bo
 	}
 }
 
+func (c *Compiler) matchPunctuation(p vbscript.Punctuation) bool {
+	if pt, ok := c.next.(*vbscript.PunctuationToken); ok && pt.Type == p {
+		return true
+	}
+	return false
+}
+
 // isIdentifierLikeToken reports whether one token can legally appear where an optional identifier is accepted.
 func (c *Compiler) isIdentifierLikeToken(token vbscript.Token) bool {
 	switch token.(type) {
@@ -3747,4 +3799,275 @@ func (c *Compiler) parseImplementsStatement(className string) {
 	classNameIdx := c.addConstant(NewString(className))
 	interfaceNameIdx := c.addConstant(NewString(interfaceName))
 	c.emitExt(ExtOpRegisterClassInterface, classNameIdx, interfaceNameIdx)
+}
+
+// parseOpenStatement parses a VB6 Open statement: Open path For mode As #num
+func (c *Compiler) parseOpenStatement() {
+	c.move() // consume Open
+	c.parseOpenStatementAfterOpen()
+}
+
+func (c *Compiler) parseOpenStatementAfterOpen() {
+	c.parseExpression(PrecNone) // path
+
+	if !c.matchKeywordOrIdentifier(vbscript.KeywordFor, "for") {
+		panic(c.vbCompileError(vbscript.SyntaxError, "Expected 'For' in Open statement"))
+	}
+	c.move()
+
+	mode := 0 // 1:Input, 2:Output, 3:Append, 4:Binary, 5:Random
+	modeToken := c.nextIdentifierName()
+	switch strings.ToLower(modeToken) {
+	case "input":
+		mode = 1
+	case "output":
+		mode = 2
+	case "append":
+		mode = 3
+	case "binary":
+		mode = 4
+	case "random":
+		mode = 5
+	default:
+		panic(c.vbCompileError(vbscript.SyntaxError, "Invalid file mode: "+modeToken))
+	}
+	c.move()
+
+	// Handle optional Access and Lock? (e.g. Access Read Write)
+	for strings.EqualFold(c.nextIdentifierName(), "access") || strings.EqualFold(c.nextIdentifierName(), "lock") {
+		c.move()
+		// consume next tokens until 'as'
+		for !c.matchKeywordOrIdentifier(vbscript.KeywordAs, "as") && !c.matchEof() && !c.isStatementEnd() {
+			c.move()
+		}
+	}
+
+	if !c.matchKeywordOrIdentifier(vbscript.KeywordAs, "as") {
+		panic(c.vbCompileError(vbscript.SyntaxError, "Expected 'As' in Open statement"))
+	}
+	c.move()
+
+	if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctHash {
+		c.move() // consume #
+	}
+
+	modeIdx := c.addConstant(NewInteger(int64(mode)))
+	c.emit(OpConstant, modeIdx)
+
+	c.parseExpression(PrecNone) // file number
+	c.emitExt(ExtOpFileOpen)
+}
+
+// parsePrintStatement parses a VB6 Print # statement: Print #num, expr1, expr2...
+func (c *Compiler) parsePrintStatement() {
+	c.move() // consume Print
+	c.parsePrintStatementAfterPrint()
+}
+
+func (c *Compiler) parsePrintStatementAfterPrint() {
+	if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctHash {
+		c.move()
+	}
+	c.parseExpression(PrecNone) // file number
+
+	if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctComma {
+		c.move()
+	}
+
+	argCount := 0
+	if !c.isStatementEnd() {
+		for {
+			c.parseExpression(PrecNone)
+			argCount++
+			if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctComma {
+				c.move()
+				continue
+			}
+			break
+		}
+	}
+
+	c.emitExt(ExtOpFilePrint, argCount)
+}
+
+// parseWriteStatement parses a VB6 Write # statement: Write #num, expr1, expr2...
+func (c *Compiler) parseWriteStatement() {
+	c.move() // consume Write
+	c.parseWriteStatementAfterWrite()
+}
+
+func (c *Compiler) parseWriteStatementAfterWrite() {
+	if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctHash {
+		c.move()
+	}
+	c.parseExpression(PrecNone) // file number
+
+	if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctComma {
+		c.move()
+	}
+
+	argCount := 0
+	if !c.isStatementEnd() {
+		for {
+			c.parseExpression(PrecNone)
+			argCount++
+			if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctComma {
+				c.move()
+				continue
+			}
+			break
+		}
+	}
+
+	c.emitExt(ExtOpFileWrite, argCount)
+}
+
+// parseCloseStatement parses a VB6 Close # statement: Close [#num1, #num2...]
+func (c *Compiler) parseCloseStatement() {
+	c.move() // consume Close
+	c.parseCloseStatementAfterClose()
+}
+
+func (c *Compiler) parseCloseStatementAfterClose() {
+	if c.isStatementEnd() {
+		// Close all
+		c.emit(OpConstant, c.addConstant(NewInteger(0)))
+		c.emitExt(ExtOpFileClose)
+		return
+	}
+
+	for {
+		if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctHash {
+			c.move()
+		}
+		c.parseExpression(PrecNone) // num
+		c.emitExt(ExtOpFileClose)
+
+		if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctComma {
+			c.move()
+			continue
+		}
+		break
+	}
+}
+
+// parseLineInputStatement parses a VB6 Line Input # statement: Line Input #num, var
+func (c *Compiler) parseLineInputStatement() {
+	// Line and Input already consumed by parseStatement/dispatch
+	if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctHash {
+		c.move()
+	}
+	c.parseExpression(PrecNone) // num
+	c.emitExt(ExtOpFileLineInput)
+
+	if !c.matchPunctuation(vbscript.PunctComma) {
+		panic(c.vbCompileError(vbscript.SyntaxError, "Expected ',' after file number in Line Input statement"))
+	}
+	c.move()
+
+	name := c.expectIdentifier()
+	op, idx := c.resolveSetVar(name)
+	c.emit(c.letOpCode(op), idx)
+}
+
+// parseInputStatement parses a VB6 Input # statement: Input #num, var1, var2...
+func (c *Compiler) parseInputStatement() {
+	c.move() // consume Input
+	c.parseInputStatementAfterInput()
+}
+
+func (c *Compiler) parseInputStatementAfterInput() {
+	if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctHash {
+		c.move()
+	}
+	c.parseExpression(PrecNone) // num
+
+	if !c.matchPunctuation(vbscript.PunctComma) {
+		panic(c.vbCompileError(vbscript.SyntaxError, "Expected ',' after file number in Input statement"))
+	}
+	c.move()
+
+	for {
+		name := c.expectIdentifier()
+		c.emit(OpJSDup)               // duplicate file num
+		c.emitExt(ExtOpFileLineInput) // Placeholder
+		op, idx := c.resolveSetVar(name)
+		c.emit(c.letOpCode(op), idx)
+
+		if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctComma {
+			c.move()
+			continue
+		}
+		break
+	}
+	c.emit(OpPop) // pop file num
+}
+
+// parsePutStatement parses a VB6 Put # statement: Put #num, [pos], value
+func (c *Compiler) parsePutStatement() {
+	c.move() // consume Put
+	c.parsePutStatementAfterPut()
+}
+
+func (c *Compiler) parsePutStatementAfterPut() {
+	if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctHash {
+		c.move()
+	}
+	c.parseExpression(PrecNone) // num
+
+	if !c.matchPunctuation(vbscript.PunctComma) {
+		panic(c.vbCompileError(vbscript.SyntaxError, "Expected ',' after file number in Put statement"))
+	}
+	c.move()
+
+	if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctComma {
+		// optional pos skipped, push empty
+		c.emit(OpConstant, c.addConstant(NewEmpty()))
+		c.move()
+	} else {
+		c.parseExpression(PrecNone) // pos
+		if !c.matchPunctuation(vbscript.PunctComma) {
+			panic(c.vbCompileError(vbscript.SyntaxError, "Expected ',' after position in Put statement"))
+		}
+		c.move()
+	}
+
+	c.parseExpression(PrecNone) // value
+	c.emitExt(ExtOpFilePut)
+}
+
+// parseGetStatement parses a VB6 Get # statement: Get #num, [pos], var
+func (c *Compiler) parseGetStatement() {
+	c.move() // consume Get
+	c.parseGetStatementAfterGet()
+}
+
+func (c *Compiler) parseGetStatementAfterGet() {
+	if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctHash {
+		c.move()
+	}
+	c.parseExpression(PrecNone) // num
+
+	if !c.matchPunctuation(vbscript.PunctComma) {
+		panic(c.vbCompileError(vbscript.SyntaxError, "Expected ',' after file number in Get statement"))
+	}
+	c.move()
+
+	if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctComma {
+		// optional pos skipped, push empty
+		c.emit(OpConstant, c.addConstant(NewEmpty()))
+		c.move()
+	} else {
+		c.parseExpression(PrecNone) // pos
+		if !c.matchPunctuation(vbscript.PunctComma) {
+			panic(c.vbCompileError(vbscript.SyntaxError, "Expected ',' after position in Get statement"))
+		}
+		c.move()
+	}
+
+	c.emitExt(ExtOpFileGet)
+
+	name := c.expectIdentifier()
+	op, idx := c.resolveSetVar(name)
+	c.emit(c.letOpCode(op), idx)
 }

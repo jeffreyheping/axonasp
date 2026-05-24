@@ -21,10 +21,13 @@
 package axonvm
 
 import (
+	"bufio"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
+	"os"
+	"path/filepath"
 	"runtime/debug"
 	"sort"
 	"strconv"
@@ -331,6 +334,9 @@ type VM struct {
 	g3tarItems                     map[int64]*G3TAR
 	g3zstdItems                    map[int64]*G3ZSTD
 	g3fcItems                      map[int64]*G3FC
+	fileIOItems                    map[int]*os.File
+	fileIOBufReaders               map[int]*bufio.Reader
+	fileIOBufWriters               map[int]*bufio.Writer
 	g3axonliveItems                map[int64]*G3AXONLIVE
 	g3axonliveProxyItems           map[int64]*G3ALComponentProxy
 	g3dbItems                      map[int64]*G3DB
@@ -618,8 +624,9 @@ func NewVM(bytecode []byte, constants []Value, globalCount int) *VM {
 		g3zipItems:                     make(map[int64]*G3Zip),
 		g3zlibItems:                    make(map[int64]*G3ZLIB),
 		g3tarItems:                     make(map[int64]*G3TAR),
-		g3zstdItems:                    make(map[int64]*G3ZSTD),
-		g3fcItems:                      make(map[int64]*G3FC),
+		fileIOItems:                    make(map[int]*os.File),
+		fileIOBufReaders:               make(map[int]*bufio.Reader),
+		fileIOBufWriters:               make(map[int]*bufio.Writer),
 		g3axonliveItems:                make(map[int64]*G3AXONLIVE),
 		g3axonliveProxyItems:           make(map[int64]*G3ALComponentProxy),
 		g3dbItems:                      make(map[int64]*G3DB),
@@ -1057,7 +1064,9 @@ func opcodeOperandSize(op OpCode, bytecode []byte, ip int) int {
 			return 7
 		case ExtOpConstant4:
 			return 9
-		case ExtOpAxonASP:
+		case ExtOpFilePrint, ExtOpFileWrite:
+			return 3
+		case ExtOpFileOpen, ExtOpFileClose, ExtOpFileLineInput, ExtOpFilePut, ExtOpFileGet, ExtOpFileFreeFile, ExtOpAxonASP:
 			return 1
 		case ExtOpJSMathSin, ExtOpJSMathCos, ExtOpJSMathTan, ExtOpJSMathAbs, ExtOpJSMathFloor, ExtOpJSMathCeil, ExtOpJSMathRound, ExtOpJSMathSqrt, ExtOpJSMathMin, ExtOpJSMathMax:
 			return 1
@@ -1130,8 +1139,11 @@ func remapExecuteGlobalBytecode(bytecode []byte, constBase int, bytecodeBase int
 			switch ext {
 			case ExtOpInitRecord, ExtOpGetRecordMember, ExtOpSetRecordMember:
 				ip += 2
-			case ExtOpAxonASP, ExtOpJSMathSin, ExtOpJSMathCos, ExtOpJSMathTan, ExtOpJSMathAbs, ExtOpJSMathFloor, ExtOpJSMathCeil, ExtOpJSMathRound, ExtOpJSMathSqrt, ExtOpJSMathMin, ExtOpJSMathMax:
+			case ExtOpAxonASP, ExtOpJSMathSin, ExtOpJSMathCos, ExtOpJSMathTan, ExtOpJSMathAbs, ExtOpJSMathFloor, ExtOpJSMathCeil, ExtOpJSMathRound, ExtOpJSMathSqrt, ExtOpJSMathMin, ExtOpJSMathMax,
+				ExtOpFileOpen, ExtOpFileClose, ExtOpFileLineInput, ExtOpFilePut, ExtOpFileGet, ExtOpFileFreeFile:
 				// No operands to remap or skip
+			case ExtOpFilePrint, ExtOpFileWrite:
+				ip += 2
 			case ExtOpJumpLocalIfFalse, ExtOpJumpGlobalIfFalse:
 				ip += 2
 				target := int(binary.BigEndian.Uint32(bytecode[ip:])) + bytecodeBase
@@ -1741,6 +1753,7 @@ func (vm *VM) Run() (err error) {
 		vm.host.Server().BeginExecution()
 		defer vm.host.Server().EndExecution()
 	}
+	defer vm.closeAllFiles()
 	defer func() {
 		if !vm.suppressTerminate {
 			vm.jsCleanupCollections()
@@ -3337,9 +3350,194 @@ aspExecLoop:
 				}
 				recVal.Rec.Members[memberIdx] = rhs
 
-			case ExtOpAxonASP:
+			case ExtOpFileOpen:
+				vm.ensureCLIMode()
+				numVal := vm.pop()
+				modeVal := vm.pop()
+				pathVal := vm.pop()
+				num := int(numVal.Num)
+				mode := int(modeVal.Num)
+				path := filepath.FromSlash(vm.valueToString(pathVal))
+
+				if num < 1 || num > 511 {
+					vm.raise(vbscript.BadFileNameOrNumber, "Invalid file number")
+					continue
+				}
+
+				var f *os.File
+				var err error
+				switch mode {
+				case 1: // Input
+					f, err = os.Open(path)
+				case 2: // Output
+					f, err = os.Create(path)
+				case 3: // Append
+					f, err = os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+				case 4, 5: // Binary/Random
+					f, err = os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
+				default:
+					vm.raise(vbscript.InternalError, "Invalid file mode")
+					continue
+				}
+
+				if err != nil {
+					vm.raise(vbscript.FileNotFound, fmt.Sprintf("Error opening file '%s': %v", path, err))
+					continue
+				}
+
+				vm.fileIOItems[num] = f
+				if mode == 1 {
+					vm.fileIOBufReaders[num] = bufio.NewReader(f)
+				} else {
+					vm.fileIOBufWriters[num] = bufio.NewWriter(f)
+				}
+
+			case ExtOpFileClose:
+				numVal := vm.pop()
+				num := int(numVal.Num)
+				if num == 0 {
+					vm.closeAllFiles()
+				} else {
+					if f, ok := vm.fileIOItems[num]; ok {
+						if w, ok2 := vm.fileIOBufWriters[num]; ok2 {
+							w.Flush()
+							delete(vm.fileIOBufWriters, num)
+						}
+						delete(vm.fileIOBufReaders, num)
+						f.Close()
+						delete(vm.fileIOItems, num)
+					}
+				}
+
+			case ExtOpFilePrint, ExtOpFileWrite:
+				vm.ensureCLIMode()
+				argCount := int(binary.BigEndian.Uint16(vm.bytecode[vm.ip:]))
 				vm.ip += 2
-				// Push the AxonASP VBScript engine identification string.
+				args := make([]Value, argCount)
+				for i := argCount - 1; i >= 0; i-- {
+					args[i] = vm.pop()
+				}
+				numVal := vm.pop()
+				num := int(numVal.Num)
+
+				w, ok := vm.fileIOBufWriters[num]
+				if !ok {
+					vm.raise(vbscript.BadFileNameOrNumber, "File not open for output")
+					continue
+				}
+
+				isWrite := ext == ExtOpFileWrite
+				for i, arg := range args {
+					s := vm.valueToString(arg)
+					if isWrite {
+						if arg.Type == VTString {
+							w.WriteString("\"" + s + "\"")
+						} else {
+							w.WriteString(s)
+						}
+						if i < argCount-1 {
+							w.WriteString(",")
+						}
+					} else {
+						w.WriteString(s)
+					}
+				}
+				w.WriteString("\n")
+
+			case ExtOpFileLineInput:
+				vm.ensureCLIMode()
+				numVal := vm.pop()
+				num := int(numVal.Num)
+				r, ok := vm.fileIOBufReaders[num]
+				if !ok {
+					vm.raise(vbscript.BadFileNameOrNumber, "File not open for input")
+					continue
+				}
+				line, err := r.ReadString('\n')
+				if err != nil && err != io.EOF {
+					vm.raise(vbscript.InternalError, err.Error())
+					continue
+				}
+				line = strings.TrimSuffix(line, "\n")
+				line = strings.TrimSuffix(line, "\r")
+				vm.push(NewString(line))
+
+			case ExtOpFilePut:
+				vm.ensureCLIMode()
+				val := vm.pop()
+				posVal := vm.pop()
+				numVal := vm.pop()
+				num := int(numVal.Num)
+
+				f, ok := vm.fileIOItems[num]
+				if !ok {
+					vm.raise(vbscript.BadFileNameOrNumber, "File not open")
+					continue
+				}
+
+				if posVal.Type != VTEmpty {
+					pos := int64(posVal.Num)
+					f.Seek(pos-1, 0)
+				}
+
+				var data []byte
+				switch val.Type {
+				case VTString:
+					data = []byte(val.Str)
+				case VTInteger:
+					data = make([]byte, 8)
+					binary.LittleEndian.PutUint64(data, uint64(val.Num))
+				case VTDouble:
+					data = make([]byte, 8)
+					binary.LittleEndian.PutUint64(data, math.Float64bits(val.Flt))
+				default:
+					vm.raise(vbscript.TypeMismatch, "Unsupported type for Put")
+					continue
+				}
+				f.Write(data)
+
+			case ExtOpFileGet:
+				vm.ensureCLIMode()
+				posVal := vm.pop()
+				numVal := vm.pop()
+				num := int(numVal.Num)
+
+				f, ok := vm.fileIOItems[num]
+				if !ok {
+					vm.raise(vbscript.BadFileNameOrNumber, "File not open")
+					continue
+				}
+
+				if posVal.Type != VTEmpty {
+					pos := int64(posVal.Num)
+					f.Seek(pos-1, 0)
+				}
+
+				buf := make([]byte, 1024)
+				n, err := f.Read(buf)
+				if err != nil && err != io.EOF {
+					vm.raise(vbscript.InternalError, err.Error())
+					continue
+				}
+				vm.push(NewString(string(buf[:n])))
+
+			case ExtOpFileFreeFile:
+				vm.ensureCLIMode()
+				nextNum := 1
+				for {
+					if _, ok := vm.fileIOItems[nextNum]; !ok {
+						break
+					}
+					nextNum++
+					if nextNum > 511 {
+						vm.raise(vbscript.InternalError, "No more file numbers available")
+						break
+					}
+				}
+				vm.push(NewInteger(int64(nextNum)))
+
+			case ExtOpAxonASP:
+				// vm.ip points to next instruction. No operands to skip.
 				vm.push(NewString("G3pix AxonASP VBScript Engine"))
 
 			case ExtOpRegisterClassEvent:
@@ -3386,19 +3584,15 @@ aspExecLoop:
 				}
 
 			case ExtOpJSMathSin:
-				vm.ip += 2
 				vm.push(NewDouble(math.Sin(vm.jsToNumber(vm.pop()).Flt)))
 
 			case ExtOpJSMathCos:
-				vm.ip += 2
 				vm.push(NewDouble(math.Cos(vm.jsToNumber(vm.pop()).Flt)))
 
 			case ExtOpJSMathTan:
-				vm.ip += 2
 				vm.push(NewDouble(math.Tan(vm.jsToNumber(vm.pop()).Flt)))
 
 			case ExtOpJSMathAbs:
-				vm.ip += 2
 				v := vm.pop()
 				if v.Type == VTInteger {
 					if v.Num < 0 {
@@ -3411,29 +3605,23 @@ aspExecLoop:
 				}
 
 			case ExtOpJSMathFloor:
-				vm.ip += 2
 				vm.push(NewDouble(math.Floor(vm.jsToNumber(vm.pop()).Flt)))
 
 			case ExtOpJSMathCeil:
-				vm.ip += 2
 				vm.push(NewDouble(math.Ceil(vm.jsToNumber(vm.pop()).Flt)))
 
 			case ExtOpJSMathRound:
-				vm.ip += 2
 				vm.push(NewDouble(math.Round(vm.jsToNumber(vm.pop()).Flt)))
 
 			case ExtOpJSMathSqrt:
-				vm.ip += 2
 				vm.push(NewDouble(math.Sqrt(vm.jsToNumber(vm.pop()).Flt)))
 
 			case ExtOpJSMathMin:
-				vm.ip += 2
 				b := vm.jsToNumber(vm.pop()).Flt
 				a := vm.jsToNumber(vm.pop()).Flt
 				vm.push(NewDouble(math.Min(a, b)))
 
 			case ExtOpJSMathMax:
-				vm.ip += 2
 				b := vm.jsToNumber(vm.pop()).Flt
 				a := vm.jsToNumber(vm.pop()).Flt
 				vm.push(NewDouble(math.Max(a, b)))
@@ -3441,6 +3629,7 @@ aspExecLoop:
 			default:
 				vm.raise(vbscript.InternalError, "Unsupported extended opcode")
 			}
+			continue
 
 		case OpMemberSet, OpMemberSetSet:
 			// OpMemberSet: [OpCode, ConstMemberIdxHigh, ConstMemberIdxLow]
@@ -9082,4 +9271,32 @@ func (vm *VM) releaseRecord(rec *VBRecord) {
 	rec.DefIdx = 0
 	rec.Members = rec.Members[:0]
 	recordPool.Put(rec)
+}
+
+func (vm *VM) ensureCLIMode() {
+	if vm.executionMode != ExecutionModeCLI && vm.executionMode != ExecutionModeTUI {
+		vm.raise(vbscript.PermissionDenied, "Native File I/O operations are restricted to CLI environment only")
+	}
+}
+
+func (vm *VM) closeAllFiles() {
+	if vm.fileIOItems != nil {
+		for _, f := range vm.fileIOItems {
+			if f != nil {
+				f.Close()
+			}
+		}
+		clear(vm.fileIOItems)
+	}
+	if vm.fileIOBufReaders != nil {
+		clear(vm.fileIOBufReaders)
+	}
+	if vm.fileIOBufWriters != nil {
+		for _, w := range vm.fileIOBufWriters {
+			if w != nil {
+				w.Flush()
+			}
+		}
+		clear(vm.fileIOBufWriters)
+	}
 }

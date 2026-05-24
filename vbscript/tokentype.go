@@ -98,6 +98,7 @@ const (
 	PunctLessOrEqual
 	PunctGreater
 	PunctGreaterOrEqual
+	PunctHash
 )
 
 // Keyword represents VBScript keywords
@@ -170,6 +171,17 @@ const (
 	KeywordWithEvents
 	KeywordImplements
 	KeywordMe
+	KeywordOpen
+	KeywordPrint
+	KeywordLine
+	KeywordInput
+	KeywordClose
+	KeywordOutput
+	KeywordAppend
+	KeywordPut
+	KeywordFreeFile
+	KeywordAs
+	KeywordWrite
 )
 
 // String returns the string representation of a Keyword
@@ -305,6 +317,28 @@ func (k Keyword) String() string {
 		return "WithEvents"
 	case KeywordMe:
 		return "Me"
+	case KeywordOpen:
+		return "Open"
+	case KeywordPrint:
+		return "Print"
+	case KeywordLine:
+		return "Line"
+	case KeywordInput:
+		return "Input"
+	case KeywordClose:
+		return "Close"
+	case KeywordOutput:
+		return "Output"
+	case KeywordAppend:
+		return "Append"
+	case KeywordPut:
+		return "Put"
+	case KeywordFreeFile:
+		return "FreeFile"
+	case KeywordAs:
+		return "As"
+	case KeywordWrite:
+		return "Write"
 	default:
 		return "Unknown"
 	}

@@ -56,7 +56,21 @@ func (c *Compiler) emitIdentifierValue(name string) {
 
 	// Check for VMENGINE global constant - returns AxonASP engine identification string.
 	if strings.EqualFold(trimmedName, "VMENGINE") {
-		c.emitExt(ExtOpAxonASP, 0)
+		c.emitExt(ExtOpAxonASP)
+		return
+	}
+
+	// Check for FreeFile builtin (VB6 File I/O)
+	if strings.EqualFold(trimmedName, "FreeFile") {
+		if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctLParen {
+			c.move() // consume '('
+			if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctRParen {
+				c.move() // consume ')'
+			} else {
+				panic(c.vbCompileError(vbscript.ExpectedRParen, "Expected ')' after 'FreeFile'"))
+			}
+		}
+		c.emitExt(ExtOpFileFreeFile)
 		return
 	}
 
