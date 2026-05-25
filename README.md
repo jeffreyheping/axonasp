@@ -298,7 +298,7 @@ We welcome contributions! Please follow these guidelines:
 
 ### AI Ready
 
-AxonASP includes a built-in Model Context Protocol (MCP) server that allows AI agents to connect directly to your runtime environment. This enables powerful capabilities such as documentation lookup and ASP code instructions generation directly from your editor or AI assistant. For details on how to connect and use the MCP server, see the [MCP Server and VS Code Integration](www/manual/md/runtime/mcp-vscode.md) documentation.
+AxonASP includes a built-in Model Context Protocol (MCP) server that allows AI agents to connect directly to your runtime environment. This enables powerful capabilities such as documentation lookup and ASP code instructions generation directly from your editor or AI assistant. For details on how to connect and use the MCP server, see the [MCP Server and VS Code Integration](www/manual/md/authoring/mcp-vscode.md) documentation.
 You can also see an example prompt for using with AI Agents in the [Program Classic ASP with LLMs](www/manual/md/authoring/llm-classic-asp-coding.md) documentation.
 
 
