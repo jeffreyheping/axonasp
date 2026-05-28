@@ -113,6 +113,7 @@ type Compiler struct {
 	Globals             *SymbolTable
 	locals              *SymbolTable         // Current function scope
 	declaredGlobals     map[string]bool      // Variables declared via Dim in global scope
+	implicitGlobals     map[string]bool      // Variables implicitly created at page scope
 	declaredLocals      map[string]bool      // Variables declared via Dim in local scope
 	globalVarTypes      map[string]ValueType // VB6 As Type declarations for global variables (VTEmpty = Variant)
 	localVarTypes       map[string]ValueType // VB6 As Type declarations for local variables (VTEmpty = Variant)
@@ -591,6 +592,7 @@ func createCompiler(code string, mode vbscript.LexerMode) *Compiler {
 		Globals:                NewSymbolTable(),
 		locals:                 NewSymbolTable(),
 		declaredGlobals:        make(map[string]bool),
+		implicitGlobals:        make(map[string]bool),
 		declaredLocals:         make(map[string]bool),
 		globalVarTypes:         make(map[string]ValueType),
 		localVarTypes:          make(map[string]ValueType),
@@ -1264,6 +1266,7 @@ func (c *Compiler) declareVar(name string) {
 	} else {
 		c.Globals.Add(name)
 		c.declaredGlobals[lower] = true
+		delete(c.implicitGlobals, lower)
 	}
 }
 
@@ -1325,7 +1328,13 @@ func (c *Compiler) resolveVar(name string) (OpCode, int) {
 		panic(c.vbCompileError(vbscript.VariableNotDefined, fmt.Sprintf("Variable not defined: '%s'", name)))
 	}
 
+	if c.isLocal {
+		idx := c.locals.Add(name)
+		return OpGetLocal, idx
+	}
+
 	idx := c.Globals.Add(name)
+	c.implicitGlobals[lower] = true
 	return OpGetGlobal, idx
 }
 
@@ -1418,6 +1427,17 @@ func (c *Compiler) resolveSetVar(name string) (OpCode, int) {
 		panic(c.vbCompileError(vbscript.IllegalAssignment, fmt.Sprintf("illegal assignment: '%s'", name)))
 	}
 
+	if c.isLocal {
+		if gidx, exists := c.Globals.Get(name); exists {
+			return OpSetGlobal, gidx
+		}
+		if c.optionExplicit {
+			panic(c.vbCompileError(vbscript.VariableNotDefined, fmt.Sprintf("Variable not defined: '%s'", name)))
+		}
+		idx := c.locals.Add(name)
+		return OpSetLocal, idx
+	}
+
 	if c.optionExplicit && !c.declaredGlobals[lower] {
 		// Special case: we might allow implicit if we are in local but it's a global
 		// but standard VBScript with Option Explicit requires Dim.
@@ -1425,6 +1445,7 @@ func (c *Compiler) resolveSetVar(name string) (OpCode, int) {
 	}
 
 	idx := c.Globals.Add(name)
+	c.implicitGlobals[lower] = true
 	return OpSetGlobal, idx
 }
 

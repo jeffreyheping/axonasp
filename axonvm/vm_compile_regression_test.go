@@ -774,6 +774,121 @@ func TestASPColonStatementSeparatorExecutesAllStatements(t *testing.T) {
 	}
 }
 
+// TestASPSingleLineIfColonStatementsStayInsideBranch verifies colon-separated
+// statements after Then do not leak outside the inline branch.
+func TestASPSingleLineIfColonStatementsStayInsideBranch(t *testing.T) {
+	source := `<% Dim s: s = "": If 1 = 0 Then s = "A": s = s & "B": Response.Write s %>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	if output.String() != "" {
+		t.Fatalf("expected empty output, got %q", output.String())
+	}
+}
+
+// TestASPSingleLineIfFCheckLineLikeBranch verifies inline If semantics used by
+// ASPSamp code.asp-style helper functions with colon-separated assignments.
+func TestASPSingleLineIfFCheckLineLikeBranch(t *testing.T) {
+	source := `<%
+Function fMin(iNum1, iNum2)
+  If iNum1 = 0 And iNum2 = 0 Then
+    fMin = -1
+  ElseIf iNum2 = 0 Then
+    fMin = iNum1
+  ElseIf iNum1 = 0 Then
+    fMin = iNum2
+  ElseIf iNum1 < iNum2 Then
+    fMin = iNum1
+  Else
+    fMin = iNum2
+  End If
+End Function
+
+Function fCheckLine(ByVal strLine)
+  fCheckLine = 0
+  iTemp = 0
+  iPos = InStr(strLine, "<" & "%")
+  If fMin(iTemp, iPos) = iPos Then iTemp = iPos: fCheckLine = 1
+  iPos = InStr(strLine, "%" & ">")
+  If fMin(iTemp, iPos) = iPos Then iTemp = iPos: fCheckLine = 2
+End Function
+
+Response.Write fCheckLine("<% x %>")
+%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	if output.String() != "1" {
+		t.Fatalf("expected fCheckLine to prefer '<%%' token (1), got %q", output.String())
+	}
+}
+
+// TestASPImplicitProcedureVariablesAreProcedureLocal verifies that implicit
+// variables used inside different procedures do not share a global slot.
+func TestASPImplicitProcedureVariablesAreProcedureLocal(t *testing.T) {
+	source := `<%
+Sub Inner(ByVal s)
+  iPos = InStr(s, "<")
+End Sub
+
+Sub Outer(ByVal s)
+  iPos = InStr(s, "<" & "%")
+  Call Inner(Left(s, iPos - 1))
+  Response.Write Right(s, Len(s) - (iPos + 1))
+End Sub
+
+Call Outer("<%X")
+%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	if output.String() != "X" {
+		t.Fatalf("expected X output, got %q", output.String())
+	}
+}
+
 // TestASPSingleLineIfThenInsideFunctionWithEndFunction verifies that a single-line
 // "If condition Then statement" inside a public/private function body compiles and
 // runs correctly when "End Function" appears on the following line.

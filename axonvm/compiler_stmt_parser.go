@@ -2523,6 +2523,25 @@ func (c *Compiler) parseIfElseBlock() {
 	}
 }
 
+// parseInlineIfBranchStatements parses one single-line If branch body.
+// In VBScript, colon-separated statements after Then/Else/ElseIf belong to that branch.
+func (c *Compiler) parseInlineIfBranchStatements() {
+	isInlineBoundary := func() bool {
+		if c.matchEof() || c.checkKeyword(vbscript.KeywordElseIf) || c.checkKeyword(vbscript.KeywordElse) || c.checkKeyword(vbscript.KeywordEnd) {
+			return true
+		}
+		switch c.next.(type) {
+		case *vbscript.LineTerminationToken, *vbscript.CommentToken, *vbscript.ASPCodeEndToken:
+			return true
+		}
+		return false
+	}
+
+	for !isInlineBoundary() {
+		c.parseStatement()
+	}
+}
+
 func (c *Compiler) parseIfStatement() {
 	c.expectKeyword(vbscript.KeywordIf)
 	c.parseExpression(PrecNone)
@@ -2531,7 +2550,7 @@ func (c *Compiler) parseIfStatement() {
 
 	if !c.isStatementEnd() {
 		jumpFalseOffset := c.emitJump(OpJumpIfFalse)
-		c.parseStatement()
+		c.parseInlineIfBranchStatements()
 
 		for c.checkKeyword(vbscript.KeywordElseIf) {
 			jumpEndOffsets = append(jumpEndOffsets, c.emitJump(OpJump))
@@ -2542,14 +2561,14 @@ func (c *Compiler) parseIfStatement() {
 			c.expectKeyword(vbscript.KeywordThen)
 
 			jumpFalseOffset = c.emitJump(OpJumpIfFalse)
-			c.parseStatement()
+			c.parseInlineIfBranchStatements()
 		}
 
 		if c.checkKeyword(vbscript.KeywordElse) {
 			c.move()
 			jumpEndOffsets = append(jumpEndOffsets, c.emitJump(OpJump))
 			c.patchJump(jumpFalseOffset)
-			c.parseStatement()
+			c.parseInlineIfBranchStatements()
 		} else {
 			c.patchJump(jumpFalseOffset)
 		}
