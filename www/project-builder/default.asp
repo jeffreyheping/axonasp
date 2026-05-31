@@ -95,6 +95,26 @@ Response.ContentType = "text/html; charset=utf-8"
 
                     <div class="form-section">
                         <h3 class="pb-subtitle">
+                            Server-Side Language
+                        </h3>
+                        <p>
+                            Select the primary Classic ASP language for generated server-side code.
+                        </p>
+                        <div class="radio-group">
+                            <div class="radio-item">
+                                <input type="radio" name="serverlang" value="VBScript" id="lang-vbscript" checked />
+                                <label for="lang-vbscript">VBScript</label>
+                            </div>
+                            <div class="radio-item">
+                                <input type="radio" name="serverlang" value="JavaScript (JScript ASP)"
+                                    id="lang-jscript" />
+                                <label for="lang-jscript">JavaScript (JScript ASP)</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-section">
+                        <h3 class="pb-subtitle">
                             Design Pattern
                         </h3>
                         <p>
@@ -177,18 +197,10 @@ Response.ContentType = "text/html; charset=utf-8"
                         </div>
                         <div id="axonasp-native-hint" class="pb-native-hint">
                             <strong>AxonASP Native Style Directives:</strong><br />
-                            Retro Microsoft MSDN Era (2003-2005) / Windows XP.
-                            Tahoma/Verdana (Primary), arial, helvetica,
-                            sans-serif (Fallback). Bold titles with a solid blue
-                            <code>border-bottom</code>. Never use emojis or
-                            icons that do not fit the era. Header: Linear
-                            gradient <code>#003399</code> to
-                            <code>#3366CC</code>. Background:
-                            <code>#ECE9D8</code> (Beige-gray). Highlight:
-                            <code>#335EA8</code>. Borders: Metallic gray
-                            <code>#808080</code>. Visual hard-edges.
-                            <code>border-radius: 0 !important</code>. Perfectly
-                            square inputs/buttons.
+                            Uses the application local
+                            stylesheet <code>axonasp.css</code> when available,
+                            or download and use
+                            <code>https://g3pix.com.br/axonasp/css/axonasp.css</code>.
                         </div>
                     </div>
 
@@ -623,6 +635,7 @@ Response.ContentType = "text/html; charset=utf-8"
                 var style = getRadio("style");
                 var db = getRadio("database");
                 var ui = getRadio("ui");
+                var serverLang = getRadio("serverlang") || "VBScript";
                 var jsframework = getRadio("jsframework");
                 var color = getRadio("color");
                 var emoji = getRadio("emoji");
@@ -638,7 +651,7 @@ Response.ContentType = "text/html; charset=utf-8"
                 md += "## Technical Requirements\n\n";
 
                 md += "### Platform & Language\n";
-                md += "- **Language:** Classic ASP (VBScript)\n";
+                md += "- **Language:** Classic ASP (" + serverLang + ")\n";
                 md += "- **Runtime:** AxonASP Virtual Machine\n\n";
 
                 md += "### Architecture\n";
@@ -655,7 +668,7 @@ Response.ContentType = "text/html; charset=utf-8"
                     "\n";
                 if (ui === "axonasp") {
                     md +=
-                        "  - _Style Directives:_ Retro Microsoft MSDN Era (2003-2005) / Windows XP. Tahoma/Verdana (Primary), arial, helvetica, sans-serif (Fallback). Bold titles with a solid blue border-bottom. Never use emojis or icons that do not fit the era. Header: Linear gradient #003399 to #3366CC. Background: #ECE9D8 (Beige-gray). Highlight: #335EA8. Borders: Metallic gray #808080. Visual hard-edges. border-radius: 0 !important. Perfectly square inputs/buttons.\n";
+                        "  - _Stylesheet Source:_ Use `axonasp.css` from the application directory first. If unavailable, download and use https://g3pix.com.br/axonasp/css/axonasp.css\n";
                 }
                 md += "- **JavaScript Framework:** " + jsframework + "\n";
                 md +=
@@ -693,189 +706,46 @@ Response.ContentType = "text/html; charset=utf-8"
                     md += val("extra").trim() + "\n\n";
                 }
 
-                md += "## VBScript & Classic ASP Coding Standards\n\n";
+                md += "## AxonASP Implementation Rules (Compact)\n\n";
+                md += "### Source of Truth & Research Order\n";
+                md += "1. Follow AxonASP patterns and compatibility rules first.\n";
+                md += "2. Instruct the coding agent to try MCP documentation first.\n";
+                md += "3. If MCP is unavailable, use AxonASP manual: https://g3pix.com.br/axonasp/manual/\n";
+                md += "4. If needed, use GitHub manual index and follow links: https://github.com/guimaraeslucas/axonasp/blob/main/www/manual/menu.md\n\n";
 
-                md += "### Code Structure & Directives\n";
-                md +=
-                    "1. **Page Directives:** Always include `<%
-                @Language = "VBSCRIPT"
-                    %> ` on the first line\n";
-                md +=
-                    "2. **Option Explicit:** Enforce strict variable declaration with `Option Explicit`\n";
-                md +=
-                    "3. **Code Blocks:** **NEVER** use single-line If statements; always use block syntax with End If\n eg: ```\nIf condition Then\n    ' code\nEnd If\n```\n This is critical and common source of bugs. Be sure before submiting the code that you're strictly following this instruction.";
-                md +=
-                    "4. **Loop Closure:** For loops end with `Next`, Do While with `Loop`, While with `Wend`\n\n";
+                md += "### Language-Specific Server Rules\n";
+                if (serverLang === "VBScript") {
+                    md += "- Use Classic ASP VBScript page directive on top: <" + "%@ Language=\"VBSCRIPT\" %" + ">.\n";
+                    md += "- Use Option Explicit and declare variables before use.\n";
+                    md += "- Never write inline single-line If; always use block If...Then...End If.\n";
+                    md += "- Close loops correctly (Next, Loop, Wend).\n";
+                    md += "- Use Set for objects and release with Set obj = Nothing.\n";
+                    md += "- Use & for string concatenation (never +).\n";
+                    md += "- No short-circuit behavior; protect risky expressions with nested If blocks.\n";
+                    md += "- Use On Error Resume Next only with immediate Err.Number checks and On Error GoTo 0 reset.\n";
+                    md += "- Read the manual of AxonASP to avoid reinventing the wheel. Prefer to use AxonASP native implementations.\n\n";
+                } else {
+                    md += "- YOU MUST Use Classic ASP JavaScript (JScript ASP) directive on top of every page: <" + "%@ Language=\"JavaScript\" %" + ">.\n";
+                    md += "- Keep compatibility with classic JScript behavior used by ASP pages.\n";
+                    md += "- Avoid modern browser-only APIs in server-side code unless explicitly supported.\n";
+                    md += "- Keep code deterministic, defensive, and aligned with AxonASP server runtime constraints.\n";
+                    md += "- Release native objects and close resources explicitly when applicable.\n";
+                    md += "- Read the manual of AxonASP to avoid reinventing the wheel. Prefer to use AxonASP native implementations.\n\n";
+                }
 
-                md += "### Variable & Object Management\n";
-                md +=
-                    "1. **Declaration:** Separate variable declaration from initialization\n";
-                md += "   ```\n";
-                md += "   Dim myVar\n";
-                md += '   myVar = "value"\n';
-                md += "   ```\n";
-                md +=
-                    "2. **Object Assignment:** Always use `Set` keyword for objects\n";
-                md += "   ```\n";
-                md += '   Set rs = Server.CreateObject("ADODB.Recordset")\n';
-                md += "   Set rs = Nothing\n";
-                md += "   ```\n";
-                md +=
-                    "3. **Variant Type:** All variables are variants; no explicit typing allowed\n\n";
+                md += "### AxonASP Native Libraries (Prefer Over Reinventing)\n";
+                md += "- Prefer built-in libraries when they already solve the task: G3JSON, G3DB, G3Files, G3HTTP, G3MAIL, G3Image, G3Template, G3PDF, G3ZIP, G3Crypto.\n";
+                md += "- Use exact ProgID/function names as documented.\n";
+                md += "- Handle errors explicitly and close/cleanup resources.\n\n";
 
-                md += "### Method & Function Invocation\n";
-                md +=
-                    "1. **Subs/Methods (no return):** Either omit parentheses or use Call keyword\n";
-                md += "   ```\n";
-                md += '   Response.Write "Hello"\n';
-                md += '   Call Response.Write("Hello")\n';
-                md += "   ```\n";
-                md +=
-                    "2. **Functions (with return):** Always use parentheses\n";
-                md += "   ```\n";
-                md += '   result = Len("text")\n';
-                md += "   ```\n\n";
+                md += "### Development Workflow\n";
+                md += "1. Map requirements to modules/pages/routes.\n";
+                md += "2. Design schema and data-access strategy.\n";
+                md += "3. Implement server logic first, then UI pages.\n";
+                md += "4. Validate error handling, edge cases, and resource cleanup.\n";
+                md += "5. Review compatibility against AxonASP documentation references above.\n\n";
 
-                md += "### Control Flow & Evaluation\n";
-                md +=
-                    "1. **Short-Circuit Logic:** VBScript does NOT short-circuit; evaluate both operands\n";
-                md +=
-                    "2. **Safe Array Access:** Nest conditions instead of using And\n";
-                md += "   ```\n";
-                md += "   If UBound(arr) >= 1 Then\n";
-                md += "       If arr(1) = value Then\n";
-                md += "           ' safe\n";
-                md += "       End If\n";
-                md += "   End If\n";
-                md += "   ```\n";
-                md += "3. **Error Handling:**\n";
-                md += "   ```\n";
-                md += "   On Error Resume Next\n";
-                md += "   ' code\n";
-                md += "   If Err.Number <> 0 Then\n";
-                md += "       ' handle\n";
-                md += "   End If\n";
-                md += "   On Error GoTo 0\n";
-                md += "   ```\n\n";
-
-                md += "### String Operations\n";
-                md +=
-                    "1. **Concatenation:** Always use `&` operator, never `+`\n";
-                md +=
-                    "2. **Comparison:** Single `=` for equality (also used for assignment)\n";
-                md +=
-                    "3. **Line Continuation:** Use space followed by underscore `_` to break long lines\n\n";
-
-                md += "### Server Object Creation\n";
-                md +=
-                    "1. **ProgID Format:** Use exact ProgID strings as documented\n";
-                md +=
-                    "2. **AxonASP Libraries:** Prefer native functions for maximum performance\n";
-                md +=
-                    "3. **Cleanup:** Always release objects when finished\n\n";
-
-                md += "## Server-Side Objects Available\n\n";
-                md +=
-                    "AxonASP natively supports these custom libraries (preferred over custom code):\n";
-                md += "- **G3JSON:** JSON encoding/decoding\n";
-                md += "- **G3DB:** Database operations\n";
-                md += "- **G3Files:** File system operations\n";
-                md += "- **G3HTTP:** HTTP client requests\n";
-                md += "- **G3MAIL:** Email sending\n";
-                md += "- **G3Image:** Image processing\n";
-                md += "- **G3Template:** Template rendering\n";
-                md += "- **G3PDF:** PDF generation\n";
-                md += "- **G3ZIP:** ZIP compression\n";
-                md += "- **G3Crypto:** Cryptographic operations\n";
-                md += "## Critical VBScript Pitfalls to Avoid\n\n";
-                md += "### Subscript Out of Range\n";
-                md +=
-                    "**Problem:** Evaluating array indices that do not exist\n";
-                md +=
-                    "**Cause:** VBScript evaluates all And operands even if first is false\n";
-                md += "**Solution:** Use nested If blocks for array safety\n\n";
-
-                md += "### String vs. Numeric Addition\n";
-                md +=
-                    "**Problem:** Using `+` for concatenation causes implicit type coercion\n";
-                md +=
-                    "**Solution:** Always use `&` for string concatenation\n\n";
-
-                md += "### Object Memory Leaks\n";
-                md += "**Problem:** Forgetting to set objects to Nothing\n";
-                md +=
-                    "**Solution:** Always explicitly release with `Set objVar = Nothing`\n\n";
-
-                md += "### Comparison Pitfalls\n";
-                md +=
-                    "**Problem:** Empty string vs. Null vs. Nothing are different\n";
-                md +=
-                    "**Solution:** Use IsEmpty(), IsNull(), IsNothing() for proper checks\n\n";
-
-                md += "## Development Workflow\n\n";
-                md += "1. Understand the business requirements above\n";
-                md += "2. Design database schema with normalized tables\n";
-                md += "3. Create models for data access and validation\n";
-                md += "4. Build controllers to handle routing and logic\n";
-                md +=
-                    "5. Implement views for user interface, if needed with template support\n";
-                md += "6. Test all code paths with sample data\n";
-                md += "7. Verify error handling and edge cases\n";
-                md += "8. Review for performance and memory efficiency\n\n";
-
-                md += "\n\n";
-                md += "## VBScript Classic ASP Compliance Summary\n\n";
-                md +=
-                    "The following guidelines from Microsoft Classic ASP standards must be enforced throughout development:\n\n";
-
-                md += "### 1. ASP Directives and Delimiters\n";
-                md +=
-                    "- Page directive must exist entirely on the first line only\n";
-                md += "- Keep directives compact with no extra spacing\n";
-                md += "- Never leave tags unclosed or mismatched\n\n";
-
-                md += "### 2. Control Structures (The If-Then Rule)\n";
-                md += "- Never use single-line If statements\n";
-                md += "- Always use block syntax with explicit End If\n";
-                md += "- After Then always start a new line\n";
-                md += "- Close loops with Next, Loop, or Wend\n\n";
-
-                md += "### 3. Variable Declaration & Initialization\n";
-                md += "- Enforce Option Explicit on every page\n";
-                md += "- Declare and assign in separate statements\n";
-                md += "- No typed variables (VBScript uses variants only)\n\n";
-
-                md += "### 4. Object Assignment (Set vs. Let)\n";
-                md += "- Always use Set for object references\n";
-                md += "- Release objects with Set objVar = Nothing\n";
-                md +=
-                    "- Example: Set rs = Server.CreateObject(ADODB.Recordset)\n\n";
-
-                md +=
-                    "### 5. Method and Function Calling (Parentheses Rules)\n";
-                md +=
-                    "- Subs/methods without return: omit parentheses OR use Call keyword\n";
-                md += "- Functions with return: always use parentheses\n";
-                md +=
-                    "- Example: Response.Write text or Call Response.Write(text)\n\n";
-
-                md += "### 6. Major Quirks vs. Modern Languages\n";
-                md +=
-                    "- No short-circuit logic: both operands of AND/OR are evaluated\n";
-                md += "- Use nested If blocks instead of compound conditions\n";
-                md +=
-                    "- Error handling: On Error Resume Next, check Err.Number, then On Error GoTo 0\n";
-                md += "- String concatenation: always use &, never +\n";
-                md += "- Line continuation: space followed by underscore _\n\n";
-
-                md += "### 7. Server-Side Object Creation\n";
-                md +=
-                    "- Use exact ProgID strings documented for each library\n";
-                md += "- Verify library is properly registered on server\n";
-                md += "- Always check for creation errors\n\n";
-                md +=
-                    "- Avoid writing custom ASP code for functionality already available natively\nFollow these rules strictly\n";
-                md += "\n\n---\n## Final Verification Checklist\n\n";
+                md += "---\n## Final Verification Checklist\n\n";
                 md += "- [ ] All variables declared with Option Explicit\n";
                 md +=
                     "- [ ] Objects assigned with Set and released with Nothing\n";
@@ -889,7 +759,9 @@ Response.ContentType = "text/html; charset=utf-8"
                 md += "- [ ] Database connections properly closed\n";
                 md += "- [ ] No hardcoded SQL values (use parameters)\n";
                 md += "- [ ] File handles properly closed\n";
-                md += "- [ ] Code tested and following Classic ASP pattern\n\n";
+                md += "- [ ] Code tested and following Classic ASP pattern\n";
+                md += "- [ ] Coding agent attempted MCP docs first\n";
+                md += "- [ ] If MCP unavailable, manual fallback links were used\n\n";
 
                 document.getElementById("output-textarea").value = md;
                 document.getElementById("output-area").classList.add("show");
@@ -925,7 +797,9 @@ Response.ContentType = "text/html; charset=utf-8"
                     document.getElementById("extra").value = "";
                     document.getElementById("style-mvc").checked = true;
                     document.getElementById("db-sqlite").checked = true;
+                    document.getElementById("lang-vbscript").checked = true;
                     document.getElementById("ui-axonasp").checked = true;
+                    document.getElementById("js-vanilla").checked = true;
                     document.getElementById("color-light").checked = true;
                     document.getElementById("emoji-enabled").checked = true;
                     document.getElementById("feat-auth").checked = true;
