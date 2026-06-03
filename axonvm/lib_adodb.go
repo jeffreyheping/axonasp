@@ -422,7 +422,7 @@ func (vm *VM) adodbConnectionOpen(conn *adodbConnection) {
 		db.SetMaxOpenConns(1)
 		db.SetMaxIdleConns(1)
 		_, _ = db.Exec("PRAGMA journal_mode = WAL")
-		_, _ = db.Exec("PRAGMA busy_timeout = 5000")
+		_, _ = db.Exec("PRAGMA busy_timeout = 6000")
 	}
 
 	conn.db = db

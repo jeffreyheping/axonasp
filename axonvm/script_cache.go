@@ -37,12 +37,13 @@ import (
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/fsnotify/fsnotify"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
 	scriptCacheDependencyMapLimit = 1000
 	scriptCacheMagicSize          = 6
-	scriptCacheBinaryVersion      = uint16(11)
+	scriptCacheBinaryVersion      = uint16(12)
 	scriptCacheDebounceWindow     = 1000 * time.Millisecond
 )
 
@@ -457,7 +458,7 @@ type ScriptCache struct {
 	dependencyMap       map[string][]string
 	scriptDependencies  map[string][]string
 	dependencyOrder     []string
-	inflightCompiles    map[string]*scriptCompileGate
+	sg                  singleflight.Group
 	watcher             *fsnotify.Watcher
 	watchRoots          []string
 	watchedPaths        map[string]struct{}
@@ -473,12 +474,6 @@ type ScriptCache struct {
 	executeAsASP []string
 	executeAsVBS []string
 	executeAsJS  []string
-}
-
-type scriptCompileGate struct {
-	done    chan struct{}
-	program CachedProgram
-	err     error
 }
 
 // NewScriptCache builds one cache instance with mode and memory limit settings.
@@ -498,7 +493,6 @@ func NewScriptCache(mode BytecodeCacheMode, cacheDir string, maxSizeMB int) *Scr
 		dependencyMap:       make(map[string][]string),
 		scriptDependencies:  make(map[string][]string),
 		dependencyOrder:     make([]string, 0, 256),
-		inflightCompiles:    make(map[string]*scriptCompileGate),
 		watchedPaths:        make(map[string]struct{}),
 		watchedExt:          defaultScriptWatchExtensions(),
 		watchDebounce:       make(map[string]time.Time, 128),
@@ -908,84 +902,79 @@ func (c *ScriptCache) LoadOrCompileWithModeAndOptions(filePath string, mode Exec
 		return c.compileOnly(normalized, options)
 	}
 
-	gate, owner := c.acquireCompileGate(cacheKey)
-	if !owner {
-		<-gate.done
-		if gate.err != nil {
-			return CachedProgram{}, gate.err
+	// singleflight deduplicates concurrent compilations for the same cache key,
+	// preventing cache-stampede memory exhaustion under concurrent cache misses.
+	resultIface, err, _ := c.sg.Do(cacheKey, func() (interface{}, error) {
+		// Re-check memory cache after acquiring the singleflight slot;
+		// another goroutine may have populated it while this call was queued.
+		if program, found := c.getByCacheKey(cacheKey); found {
+			if includeSiteRootMatches(program, options) {
+				return &program, nil
+			}
 		}
-		if includeSiteRootMatches(gate.program, options) {
-			return immutableCachedProgramView(gate.program), nil
+
+		sourceInfo, statErr := os.Stat(normalized)
+		if statErr != nil {
+			return nil, statErr
 		}
+
+		if c.mode.HasDiskTier() && strings.TrimSpace(options.IncludeSiteRoot) == "" {
+			if program, found := c.loadDiskProgram(normalized, sourceInfo); found {
+				if c.mode.HasMemoryTier() {
+					c.putByCacheKey(cacheKey, program, program.IncludeDependencies, estimateProgramSizeBytes(program))
+				}
+				return &program, nil
+			}
+		}
+
+		content, readErr := os.ReadFile(normalized)
+		if readErr != nil {
+			return nil, readErr
+		}
+
+		// Strip UTF-8 BOM if present to prevent parsing errors
+		content = stripUTF8BOM(content)
+
+		var compiler *Compiler
+		resolvedMode := c.resolveEngineMode(normalized)
+		switch resolvedMode {
+		case EngineModeJavaScript:
+			compiler = NewJavaScriptCompiler(string(content))
+		case EngineModeVBScript:
+			compiler = NewCompiler(string(content))
+		default:
+			compiler = NewASPCompiler(string(content))
+		}
+
+		compiler.SetSourceName(cacheKey)
+		compiler.SetIncludeSiteRoot(options.IncludeSiteRoot)
+		if compErr := compiler.Compile(); compErr != nil {
+			return nil, compErr
+		}
+
+		program := buildCachedProgramFromCompiler(compiler)
+
+		if c.mode.HasDiskTier() && strings.TrimSpace(options.IncludeSiteRoot) == "" {
+			if storeErr := c.storeDiskProgram(normalized, sourceInfo.ModTime(), program); storeErr != nil {
+				log.Printf("Warning: failed to persist bytecode cache to disk for %s: %v", normalized, storeErr)
+			}
+		}
+		if c.mode.HasMemoryTier() {
+			c.putByCacheKey(cacheKey, program, program.IncludeDependencies, estimateProgramSizeBytes(program))
+		}
+		result := immutableCachedProgramView(program)
+		return &result, nil
+	})
+
+	if err != nil {
+		return CachedProgram{}, err
+	}
+
+	program := *resultIface.(*CachedProgram)
+	if !includeSiteRootMatches(program, options) {
 		return c.compileOnly(normalized, options)
 	}
-
-	var result CachedProgram
-	var compileErr error
-	defer c.releaseCompileGate(cacheKey, gate, result, compileErr)
-
-	if program, found := c.getByCacheKey(cacheKey); found {
-		if includeSiteRootMatches(program, options) {
-			result = program
-			return result, nil
-		}
-	}
-
-	sourceInfo, err := os.Stat(normalized)
-	if err != nil {
-		compileErr = err
-		return CachedProgram{}, compileErr
-	}
-
-	if c.mode.HasDiskTier() && strings.TrimSpace(options.IncludeSiteRoot) == "" {
-		if program, found := c.loadDiskProgram(normalized, sourceInfo); found {
-			if c.mode.HasMemoryTier() {
-				c.putByCacheKey(cacheKey, program, program.IncludeDependencies, estimateProgramSizeBytes(program))
-			}
-			result = program
-			return result, nil
-		}
-	}
-
-	content, err := os.ReadFile(normalized)
-	if err != nil {
-		compileErr = err
-		return CachedProgram{}, compileErr
-	}
-
-	// Strip UTF-8 BOM if present to prevent parsing errors
-	content = stripUTF8BOM(content)
-
-	var compiler *Compiler
-	resolvedMode := c.resolveEngineMode(normalized)
-	switch resolvedMode {
-	case EngineModeJavaScript:
-		compiler = NewJavaScriptCompiler(string(content))
-	case EngineModeVBScript:
-		compiler = NewCompiler(string(content))
-	default:
-		compiler = NewASPCompiler(string(content))
-	}
-
-	compiler.SetSourceName(cacheKey)
-	compiler.SetIncludeSiteRoot(options.IncludeSiteRoot)
-	if err := compiler.Compile(); err != nil {
-		compileErr = err
-		return CachedProgram{}, compileErr
-	}
-
-	program := buildCachedProgramFromCompiler(compiler)
-
-	if c.mode.HasDiskTier() && strings.TrimSpace(options.IncludeSiteRoot) == "" {
-		if storeErr := c.storeDiskProgram(normalized, sourceInfo.ModTime(), program); storeErr != nil {
-			log.Printf("Warning: failed to persist bytecode cache to disk for %s: %v", normalized, storeErr)
-		}
-	}
-	if c.mode.HasMemoryTier() {
-		c.putByCacheKey(cacheKey, program, program.IncludeDependencies, estimateProgramSizeBytes(program))
-	}
-	result = immutableCachedProgramView(program)
-	return result, nil
+	return program, nil
 }
 
 // compileOnly compiles a script without using any cache layer.
@@ -1551,35 +1540,6 @@ func (c *ScriptCache) putByCacheKey(cacheKey string, program CachedProgram, depe
 	c.programOrder = append(c.programOrder, cacheKey)
 	c.totalBytes += sizeBytes
 	c.registerDependenciesNoLock(cacheKey, dependencies)
-}
-
-func (c *ScriptCache) acquireCompileGate(cacheKey string) (*scriptCompileGate, bool) {
-	if c == nil {
-		return nil, true
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.inflightCompiles == nil {
-		c.inflightCompiles = make(map[string]*scriptCompileGate)
-	}
-	if gate, exists := c.inflightCompiles[cacheKey]; exists {
-		return gate, false
-	}
-	gate := &scriptCompileGate{done: make(chan struct{})}
-	c.inflightCompiles[cacheKey] = gate
-	return gate, true
-}
-
-func (c *ScriptCache) releaseCompileGate(cacheKey string, gate *scriptCompileGate, program CachedProgram, err error) {
-	if c == nil || gate == nil {
-		return
-	}
-	c.mu.Lock()
-	gate.program = immutableCachedProgramView(program)
-	gate.err = err
-	close(gate.done)
-	delete(c.inflightCompiles, cacheKey)
-	c.mu.Unlock()
 }
 
 func containsFold(values []string, target string) bool {
