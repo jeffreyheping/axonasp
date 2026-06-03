@@ -85,6 +85,22 @@ func runASPSourceForTestWithErr(t *testing.T, source string) (string, error) {
 	return output.String(), err
 }
 
+func runASPSourceForTestWithVM(t *testing.T, source string) (string, *VM, error) {
+	t.Helper()
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	host.Response().SetBuffer(false)
+	vm.SetHost(host)
+	err := vm.Run()
+	return output.String(), vm, err
+}
+
 func TestJScriptCompileErrorsUseJScriptMetadata(t *testing.T) {
 	compiler := NewASPCompiler(`<script runat="server" language="JScript">var x = ;</script>`)
 	compiler.SetSourceName("/tests/jscript_compile_error.asp")
@@ -1732,6 +1748,24 @@ func TestJScriptES5StringReplaceCallback(t *testing.T) {
 	out := runASPSourceForTest(t, source)
 	if out != "abc[123:3:9]def|ax1a" {
 		t.Fatalf("unexpected callback replace output: %q", out)
+	}
+}
+
+func TestJScriptES5StringReplaceRegexCallbackAvoidsLocalClone(t *testing.T) {
+	source := `<script runat="server" language="JScript">` +
+		`var calls = 0;` +
+		`var out = "a1b2c3d4".replace(/\d/g, function(match, offset) { calls++; return "[" + offset + "]"; });` +
+		`Response.Write(out + "|" + calls);` +
+		`</script>`
+	out, vm, err := runASPSourceForTestWithVM(t, source)
+	if err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	if out != "a[1]b[3]c[5]d[7]|4" {
+		t.Fatalf("unexpected regex callback output: %q", out)
+	}
+	if vm.cloneForExecuteLocalCount != 0 {
+		t.Fatalf("expected no local clone in regex callback path, got %d", vm.cloneForExecuteLocalCount)
 	}
 }
 

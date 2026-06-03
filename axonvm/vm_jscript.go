@@ -3254,6 +3254,92 @@ func (vm *VM) jsBeginDirectCall(callee Value, thisVal Value, args []Value) bool 
 	return vm.jsBeginFunctionCall(callee, thisVal, args, Value{Type: VTJSUndefined}, false, Value{Type: VTJSUndefined}, false)
 }
 
+// jsEnsureDirectCallHaltIP returns one VM-local OpHalt trampoline address used
+// to stop nested direct callback execution immediately after function return.
+func (vm *VM) jsEnsureDirectCallHaltIP() int {
+	if vm.jsDirectCallHaltIP >= 0 && vm.jsDirectCallHaltIP < len(vm.bytecode) {
+		if OpCode(vm.bytecode[vm.jsDirectCallHaltIP]) == OpHalt {
+			return vm.jsDirectCallHaltIP
+		}
+	}
+	vm.jsDirectCallHaltIP = len(vm.bytecode)
+	vm.bytecode = append(vm.bytecode, byte(OpHalt))
+	return vm.jsDirectCallHaltIP
+}
+
+// jsCallDirectNoClone executes one regular user-defined JScript function call
+// on the active VM, without cloneForExecuteLocal.
+func (vm *VM) jsCallDirectNoClone(callee Value, thisVal Value, args []Value) (Value, bool) {
+	if callee.Type != VTJSFunction {
+		return Value{Type: VTJSUndefined}, false
+	}
+	closure, ok := vm.jsFunctionItems[callee.Num]
+	if !ok || closure == nil {
+		return Value{Type: VTJSUndefined}, false
+	}
+	if closure.startIP < 0 || closure.endIP <= closure.startIP || closure.endIP > len(vm.bytecode) {
+		return Value{Type: VTJSUndefined}, false
+	}
+	for i := closure.startIP; i < closure.endIP; i++ {
+		if OpCode(vm.bytecode[i]) == OpJSThrow {
+			return Value{Type: VTJSUndefined}, false
+		}
+	}
+
+	savedIP := vm.ip
+	savedTryStack := append(make([]int, 0, len(vm.jsTryStack)), vm.jsTryStack...)
+	savedErrStack := append(make([]Value, 0, len(vm.jsErrStack)), vm.jsErrStack...)
+	if !vm.jsBeginDirectCall(callee, thisVal, args) {
+		return Value{Type: VTJSUndefined}, false
+	}
+	frameIdx := len(vm.jsCallStack) - 1
+	if frameIdx < 0 {
+		vm.ip = savedIP
+		return Value{Type: VTJSUndefined}, false
+	}
+	vm.jsCallStack[frameIdx].tryDepth = 0
+	vm.jsTryStack = vm.jsTryStack[:0]
+	vm.jsErrStack = vm.jsErrStack[:0]
+	frameSavedSP := vm.jsCallStack[frameIdx].savedSP
+	vm.jsCallStack[frameIdx].returnIP = vm.jsEnsureDirectCallHaltIP()
+
+	var runErr error
+	var runThrow *jsAsyncRejectionError
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				if are, ok := r.(*jsAsyncRejectionError); ok {
+					runThrow = are
+					return
+				}
+				panic(r)
+			}
+		}()
+		runErr = vm.Run()
+	}()
+	vm.ip = savedIP
+	vm.jsTryStack = savedTryStack
+	vm.jsErrStack = savedErrStack
+
+	if runThrow != nil {
+		vm.jsThrow(runThrow.reason)
+		return Value{Type: VTJSUndefined}, true
+	}
+	if runErr != nil {
+		if vmErr, ok := runErr.(*VMError); ok {
+			vm.jsThrowJSError(jscript.JSSyntaxErrorCode(vmErr.Code))
+			return Value{Type: VTJSUndefined}, true
+		}
+		vm.jsThrowTypeError(runErr.Error())
+		return Value{Type: VTJSUndefined}, true
+	}
+
+	if vm.sp > frameSavedSP {
+		return vm.pop(), true
+	}
+	return Value{Type: VTJSUndefined}, true
+}
+
 // jsEnvHasCapturedClosures reports whether any closure currently captures envID.
 func (vm *VM) jsEnvHasCapturedClosures(envID int64) bool {
 	if envID == 0 {
@@ -7849,7 +7935,10 @@ func (vm *VM) jsStringReplaceRegex(source string, pattern string, flags string, 
 				callbackArgs = append(callbackArgs, Value{Type: VTJSObject, Num: groupsObjID})
 			}
 
-			cb := vm.jsCall(replacementArg, Value{Type: VTJSUndefined}, callbackArgs)
+			cb, handled := vm.jsCallDirectNoClone(replacementArg, Value{Type: VTJSUndefined}, callbackArgs)
+			if !handled {
+				cb = vm.jsCall(replacementArg, Value{Type: VTJSUndefined}, callbackArgs)
+			}
 			repl = vm.valueToString(cb)
 		} else {
 			// String replacement with $ tokens

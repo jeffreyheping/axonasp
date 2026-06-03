@@ -580,6 +580,15 @@ type VM struct {
 	pooledSlot      chan struct{}
 	comInitialized  bool
 	comThreadLocked bool
+	runDepth        int
+
+	// jsDirectCallHaltIP is a lazily allocated OpHalt trampoline used by
+	// internal direct callback execution paths that must stop at function return.
+	jsDirectCallHaltIP int
+
+	// cloneForExecuteLocalCount tracks cloneForExecuteLocal invocations for
+	// perf regression tests in clone-sensitive JScript paths.
+	cloneForExecuteLocalCount uint64
 
 	nextCallMemberICID uint32
 	callMemberIC       map[uint32]callMemberICEntry
@@ -780,6 +789,7 @@ func NewVM(bytecode []byte, constants []Value, globalCount int) *VM {
 		jsThisValue:        Value{Type: VTJSUndefined},
 		consoleTimerItems:  make(map[string]time.Time),
 		terminateCursor:    -1,
+		jsDirectCallHaltIP: -1,
 		nextCallMemberICID: 1,
 		callMemberIC:       make(map[uint32]callMemberICEntry, 32),
 	}
@@ -1523,6 +1533,7 @@ func (vm *VM) cloneForExecuteGlobal(startIP int) *VM {
 // cloneForExecuteLocal builds an execution VM that shares the parent
 // stack and call frame context to enable local variable access.
 func (vm *VM) cloneForExecuteLocal(startIP int) *VM {
+	vm.cloneForExecuteLocalCount++
 	child := *vm
 	// Copy the active stack so the child can suspend or resume without being
 	// clobbered by the caller continuing execution on the parent VM.
@@ -1807,13 +1818,21 @@ func (vm *VM) IsInteractiveMode() bool {
 
 // Run executes the loaded bytecode.
 func (vm *VM) Run() (err error) {
-	if vm.host != nil && vm.host.Server() != nil {
+	vm.runDepth++
+	isRootRun := vm.runDepth == 1
+	defer func() {
+		vm.runDepth--
+	}()
+
+	if isRootRun && vm.host != nil && vm.host.Server() != nil {
 		vm.host.Server().BeginExecution()
 		defer vm.host.Server().EndExecution()
 	}
-	defer vm.closeAllFiles()
+	if isRootRun {
+		defer vm.closeAllFiles()
+	}
 	defer func() {
-		if !vm.suppressTerminate {
+		if isRootRun && !vm.suppressTerminate {
 			vm.jsCleanupCollections()
 		}
 	}()
@@ -1830,7 +1849,7 @@ func (vm *VM) Run() (err error) {
 				return
 			}
 			if are, ok := r.(*jsAsyncRejectionError); ok {
-				if vm.suppressTerminate {
+				if vm.suppressTerminate || !isRootRun {
 					panic(are)
 				}
 				vm.raise(vbscript.InternalError, "Unhandled JScript exception: "+vm.valueToString(are.reason))
@@ -1873,10 +1892,12 @@ func (vm *VM) Run() (err error) {
 	}()
 	operationCount := 0
 	jsBackJumpCount := 0
-	vm.jsStringWorkBytes = 0
-	// Reset the concat scratch buffer so leftover capacity from a previous run does not
-	// pin a large backing array unnecessarily across request boundaries.
-	vm.stringWorkBuffer = vm.stringWorkBuffer[:0]
+	if isRootRun {
+		vm.jsStringWorkBytes = 0
+		// Reset the concat scratch buffer so leftover capacity from a previous run does not
+		// pin a large backing array unnecessarily across request boundaries.
+		vm.stringWorkBuffer = vm.stringWorkBuffer[:0]
+	}
 
 aspExecLoop:
 	for vm.ip < len(vm.bytecode) {
