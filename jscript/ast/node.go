@@ -113,6 +113,7 @@ type (
 		Member       Expression
 		LeftBracket  file.Idx
 		RightBracket file.Idx
+		ICNodeID     uint32 // Inline cache node ID assigned by compiler
 	}
 
 	CallExpression struct {
@@ -120,6 +121,7 @@ type (
 		LeftParenthesis  file.Idx
 		ArgumentList     []Expression
 		RightParenthesis file.Idx
+		ICNodeID         uint32 // Inline cache node ID assigned by compiler
 	}
 
 	ConditionalExpression struct {
@@ -131,11 +133,13 @@ type (
 	DotExpression struct {
 		Left       Expression
 		Identifier Identifier
+		ICNodeID   uint32 // Inline cache node ID assigned by compiler
 	}
 
 	PrivateDotExpression struct {
 		Left       Expression
 		Identifier PrivateIdentifier
+		ICNodeID   uint32 // Inline cache node ID assigned by compiler
 	}
 
 	OptionalChain struct {

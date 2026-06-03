@@ -174,6 +174,8 @@ func (c *Compiler) compileJScriptBlockWithLineAnchors(source string, anchors []j
 	if hasStrictMode {
 		c.emit(OpJSStrictModeExit)
 	}
+
+	c.jsICNodeCount = c.jsNextICNodeID
 }
 
 // compileJScriptEvalSnippet parses one JScript eval source and emits OpJS bytecode
@@ -241,6 +243,7 @@ func (c *Compiler) compileJScriptEvalSnippet(source string) {
 		c.emit(OpJSStrictModeExit)
 	}
 
+	c.jsICNodeCount = c.jsNextICNodeID
 	c.emit(OpHalt)
 }
 
@@ -1806,13 +1809,19 @@ func (c *Compiler) emitJSJumpIfLessFast(nameIdx, limitIdx int) int {
 }
 
 // emitJSMemberGet emits one IC-enabled JScript member-get opcode.
+// Assigns a unique ICNodeID for VM-local inline cache state isolation.
 func (c *Compiler) emitJSMemberGet(nameIdx int) {
-	c.emit(OpJSMemberGet, nameIdx)
+	icID := c.jsNextICNodeID
+	c.jsNextICNodeID++
+	c.emit(OpJSMemberGet, nameIdx, int(icID))
 }
 
 // emitJSMemberSet emits one IC-enabled JScript member-set opcode.
+// Assigns a unique ICNodeID for VM-local inline cache state isolation.
 func (c *Compiler) emitJSMemberSet(nameIdx int) {
-	c.emit(OpJSMemberSet, nameIdx)
+	icID := c.jsNextICNodeID
+	c.jsNextICNodeID++
+	c.emit(OpJSMemberSet, nameIdx, int(icID))
 }
 
 func (c *Compiler) emitJSForIn(nameIdx int) int {

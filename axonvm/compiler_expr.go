@@ -1076,6 +1076,7 @@ func (c *Compiler) Compile() (err error) {
 
 	if c.isJSModule {
 		c.compileJScriptBlock(c.sourceCode)
+		c.jsICNodeCount = c.jsNextICNodeID
 		c.emit(OpHalt)
 		return nil
 	}
@@ -1083,6 +1084,7 @@ func (c *Compiler) Compile() (err error) {
 	c.resetTokenStream()
 	if c.isEval {
 		c.parseExpression(PrecNone)
+		c.jsICNodeCount = c.jsNextICNodeID
 		c.emit(OpHalt)
 		c.optimizePeephole()
 		return nil
@@ -1202,6 +1204,7 @@ func (c *Compiler) Compile() (err error) {
 		}
 	}
 
+	c.jsICNodeCount = c.jsNextICNodeID
 	c.emit(OpHalt)
 	c.optimizePeephole()
 	return nil

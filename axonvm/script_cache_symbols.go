@@ -164,6 +164,7 @@ func buildCachedProgramFromCompiler(compiler *Compiler) CachedProgram {
 		SourceMapEntries:    compiler.SourceMapEntries(),
 		RecordDecls:         cloneRecordDeclSlice(compiler.recordDecls),
 		RecordDeclLookup:    cloneIntMap(compiler.recordDeclLookup),
+		JSICNodeCount:       compiler.jsICNodeCount,
 	}
 
 	if compiler.IsJSModule() {

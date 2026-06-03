@@ -96,12 +96,15 @@ func (vm *VM) jsRunNodeEventsPolyfill() Value {
 
 	compiler := NewASPCompiler("")
 	compiler.sourceName = "__builtin__:events"
+	vm.jsPrepareDynamicCompilerIC(compiler)
 	compiler.compileJScriptBlock(source)
 	compiler.emit(OpHalt)
 
 	if len(compiler.bytecode) == 0 {
 		return Value{Type: VTJSUndefined}
 	}
+
+	vm.jsExtendICStateFromCompiler(compiler)
 
 	startIP := vm.appendExecuteProgram(compiler.GlobalsCount(), compiler.constants, compiler.bytecode)
 	if startIP < 0 || startIP >= len(vm.bytecode) {

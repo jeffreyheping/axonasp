@@ -43,7 +43,7 @@ import (
 const (
 	scriptCacheDependencyMapLimit = 1000
 	scriptCacheMagicSize          = 6
-	scriptCacheBinaryVersion      = uint16(12)
+	scriptCacheBinaryVersion      = uint16(13)
 	scriptCacheDebounceWindow     = 1000 * time.Millisecond
 )
 
@@ -126,6 +126,9 @@ type CachedProgram struct {
 	GlobalClassNames []string // "name:classname"
 	LocalVarTypes    map[string]ValueType
 	LocalClassTypes  map[string]string
+
+	// JScript inline cache node count for VM-local icState pre-allocation.
+	JSICNodeCount uint32
 }
 
 // cachedProgramBinaryPayload stores the serialized disk representation.
@@ -244,6 +247,9 @@ func (p *cachedProgramBinaryPayload) Serialize(writer io.Writer) error {
 		return err
 	}
 	if err := writeSourceMapEntries(buffered, p.Program.SourceMapEntries); err != nil {
+		return err
+	}
+	if err := binary.Write(buffered, binary.LittleEndian, p.Program.JSICNodeCount); err != nil {
 		return err
 	}
 
@@ -426,6 +432,13 @@ func (p *cachedProgramBinaryPayload) Deserialize(reader io.Reader) error {
 							return err
 						}
 						p.Program.SourceMapEntries = sourceMapEntries
+						if version >= 13 {
+							var jsICNodeCount uint32
+							if err := binary.Read(reader, binary.LittleEndian, &jsICNodeCount); err != nil {
+								return err
+							}
+							p.Program.JSICNodeCount = jsICNodeCount
+						}
 					}
 				}
 			}
@@ -1128,6 +1141,9 @@ func NewVMFromCachedProgram(program CachedProgram) *VM {
 	clear(vm.RecordDeclLookup)
 	for k, v := range program.RecordDeclLookup {
 		vm.RecordDeclLookup[k] = v
+	}
+	if program.JSICNodeCount > 0 {
+		vm.icState = make([]InlineCacheSlot, program.JSICNodeCount)
 	}
 	vm.applyLocalVarTypesFromMaps(program.LocalVarTypes, program.LocalClassTypes)
 	vm.captureBaseProgramState()
@@ -1928,13 +1944,21 @@ func immutableCachedProgramView(program CachedProgram) CachedProgram {
 	program.GlobalNamesLower = immutableStringView(program.GlobalNamesLower)
 	program.RecordDecls = immutableRecordDeclView(program.RecordDecls)
 
-	for i := range program.Constants {
-		program.Constants[i].Names = immutableStringView(program.Constants[i].Names)
+	// Clone constants to avoid mutating shared Value.Names fields under concurrent access.
+	if len(program.Constants) > 0 {
+		cloned := make([]Value, len(program.Constants))
+		copy(cloned, program.Constants)
+		for i := range cloned {
+			cloned[i].Names = immutableStringView(cloned[i].Names)
+		}
+		program.Constants = cloned[:len(cloned):len(cloned)]
 	}
 	if len(program.FuncParamDefaults) > 0 {
+		cloned := make(map[int][]int, len(program.FuncParamDefaults))
 		for key, values := range program.FuncParamDefaults {
-			program.FuncParamDefaults[key] = immutableIntView(values)
+			cloned[key] = immutableIntView(values)
 		}
+		program.FuncParamDefaults = cloned
 	}
 
 	return program
@@ -1968,12 +1992,15 @@ func immutableRecordDeclView(values []CompiledRecordDecl) []CompiledRecordDecl {
 	if len(values) == 0 {
 		return nil
 	}
-	for i := range values {
-		if len(values[i].Members) > 0 {
-			values[i].Members = values[i].Members[:len(values[i].Members):len(values[i].Members)]
+	// Clone to avoid mutating shared struct fields under concurrent access.
+	cloned := make([]CompiledRecordDecl, len(values))
+	copy(cloned, values)
+	for i := range cloned {
+		if len(cloned[i].Members) > 0 {
+			cloned[i].Members = cloned[i].Members[:len(cloned[i].Members):len(cloned[i].Members)]
 		}
 	}
-	return values[:len(values):len(values)]
+	return cloned[:len(cloned):len(cloned)]
 }
 
 func immutableStringView(values []string) []string {

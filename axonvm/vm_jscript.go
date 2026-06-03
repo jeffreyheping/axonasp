@@ -22,7 +22,7 @@ package axonvm
 
 import (
 	"encoding/base64"
-	"encoding/binary"
+	_ "encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -890,11 +890,14 @@ func (vm *VM) jsEval(args []Value) Value {
 
 	compiler := NewASPCompiler("")
 	compiler.sourceName = vm.sourceName
+	vm.jsPrepareDynamicCompilerIC(compiler)
 	compiler.compileJScriptEvalSnippet(expr)
 
 	if len(compiler.bytecode) == 0 {
 		return Value{Type: VTJSUndefined}
 	}
+
+	vm.jsExtendICStateFromCompiler(compiler)
 
 	startIP := vm.appendExecuteProgram(compiler.GlobalsCount(), compiler.constants, compiler.bytecode)
 	if startIP < 0 || startIP >= len(vm.bytecode) {
@@ -1338,14 +1341,43 @@ func (vm *VM) jsICMemberSet(target Value, member string, val Value, shapeID uint
 	return true
 }
 
-func (vm *VM) jsICPopulate(cachePos int, target Value, member string) {
-	shapeID, slot, ok := vm.jsResolveICSlot(target, member)
-	if !ok || cachePos+8 > len(vm.bytecode) {
+func (vm *VM) jsICPopulate(icNodeID uint16, target Value, member string) {
+	if int(icNodeID) >= len(vm.icState) {
 		return
 	}
-	binary.BigEndian.PutUint32(vm.bytecode[cachePos:], shapeID)
-	binary.BigEndian.PutUint16(vm.bytecode[cachePos+4:], slot)
-	binary.BigEndian.PutUint16(vm.bytecode[cachePos+6:], 1)
+	shapeID, slot, ok := vm.jsResolveICSlot(target, member)
+	if !ok {
+		return
+	}
+	vm.icState[icNodeID] = InlineCacheSlot{
+		ShapeID: shapeID,
+		Slot:    slot,
+		Flags:   1,
+	}
+}
+
+// jsPrepareDynamicCompilerIC offsets a fresh compiler's IC node ID counter so
+// newly assigned ICNodeIDs do not collide with the VM's existing icState entries.
+// After compilation, extendICStateFromCompiler must be called to grow icState.
+func (vm *VM) jsPrepareDynamicCompilerIC(c *Compiler) {
+	if c == nil || vm == nil {
+		return
+	}
+	c.jsNextICNodeID = uint32(len(vm.icState))
+}
+
+// jsExtendICStateFromCompiler grows vm.icState to cover IC nodes allocated by a
+// dynamic compiler that was prepared with jsPrepareDynamicCompilerIC.
+func (vm *VM) jsExtendICStateFromCompiler(c *Compiler) {
+	if c == nil || vm == nil {
+		return
+	}
+	end := int(c.jsNextICNodeID)
+	if end > len(vm.icState) {
+		extended := make([]InlineCacheSlot, end)
+		copy(extended, vm.icState)
+		vm.icState = extended
+	}
 }
 
 // jsClassInherit wires a derived class to its superclass and returns the subclass.

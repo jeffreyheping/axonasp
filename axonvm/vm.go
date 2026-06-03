@@ -300,6 +300,16 @@ type callMemberICEntry struct {
 	nativeMember string
 }
 
+// InlineCacheSlot holds monomorphic inline cache state for a single JScript
+// property access site. It is stored in a VM-local flat array indexed by the
+// ICNodeID assigned during compilation, isolating IC state from the shared
+// AST/bytecode and eliminating concurrent mutation races.
+type InlineCacheSlot struct {
+	ShapeID uint32
+	Slot    uint16
+	Flags   uint16
+}
+
 // nativeObjectProxy represents a property access that requires parameters (e.g. dict.Key(idx)).
 type nativeObjectProxy struct {
 	ParentID int64
@@ -573,6 +583,7 @@ type VM struct {
 
 	nextCallMemberICID uint32
 	callMemberIC       map[uint32]callMemberICEntry
+	icState            []InlineCacheSlot // VM-local inline cache state indexed by ICNodeID
 }
 
 func (vm *VM) mapRuntimeLocation(line int, column int) (string, int, int) {
@@ -864,6 +875,11 @@ func NewVMFromCompiler(compiler *Compiler) *VM {
 		vm.funcParamDefaults[entryPoint] = defs
 	}
 
+	// Pre-allocate inline cache state from compiler IC node count.
+	if compiler.jsICNodeCount > 0 {
+		vm.icState = make([]InlineCacheSlot, compiler.jsICNodeCount)
+	}
+
 	vm.captureBaseProgramState()
 	return vm
 }
@@ -1111,9 +1127,9 @@ func opcodeOperandSize(op OpCode, bytecode []byte, ip int) int {
 	// 8-byte operands
 	case OpCallMember:
 		return 8
-	// 10-byte operands: nameConstIdx(2) + inline cache payload(8)
+	// 4-byte operands: nameConstIdx(2) + icNodeID(2)
 	case OpJSMemberGet, OpJSMemberSet:
-		return 10
+		return 4
 	// 6-byte operands: classNameIdx(2) + fieldNameIdx(2) + isPublic(2)
 	case OpRegisterClassField:
 		return 6
@@ -1163,7 +1179,7 @@ func remapExecuteGlobalBytecode(bytecode []byte, constBase int, bytecodeBase int
 		case OpJSMemberGet, OpJSMemberSet:
 			idx := int(binary.BigEndian.Uint16(bytecode[ip:])) + constBase
 			binary.BigEndian.PutUint16(bytecode[ip:], uint16(idx))
-			ip += 10
+			ip += 4
 		case OpExtPrefix:
 			ext := ExtOpCode(bytecode[ip])
 			ip++
@@ -1495,6 +1511,11 @@ func (vm *VM) cloneForExecuteGlobal(startIP int) *VM {
 	child.jsBlockScopeConst = make([]map[string]struct{}, 0)
 	child.jsBlockScopeTDZ = make([]map[string]struct{}, 0)
 	child.jsBlockScopeDepth = 0
+	// Deep-copy icState for isolated inline cache state in the child VM.
+	if len(vm.icState) > 0 {
+		child.icState = make([]InlineCacheSlot, len(vm.icState))
+		copy(child.icState, vm.icState)
+	}
 
 	return &child
 }
@@ -1589,6 +1610,11 @@ func (vm *VM) cloneForExecuteLocal(startIP int) *VM {
 		child.jsBlockScopeTDZ[i] = cloned
 	}
 	child.jsBlockScopeDepth = len(child.jsBlockScopes)
+	// Deep-copy icState so the child VM has its own isolated inline cache slots.
+	if len(vm.icState) > 0 {
+		child.icState = make([]InlineCacheSlot, len(vm.icState))
+		copy(child.icState, vm.icState)
+	}
 	child.classInstanceOrder = append(make([]int64, 0, len(vm.classInstanceOrder)), vm.classInstanceOrder...)
 	child.jsTryStack = make([]int, 0, 8)
 	child.jsErrStack = make([]Value, 0, 4)
@@ -4141,17 +4167,17 @@ aspExecLoop:
 		case OpJSMemberGet:
 			nameIdx := binary.BigEndian.Uint16(vm.bytecode[vm.ip:])
 			vm.ip += 2
-			cachePos := vm.ip
-			cachedShape := binary.BigEndian.Uint32(vm.bytecode[cachePos:])
-			cachedSlot := binary.BigEndian.Uint16(vm.bytecode[cachePos+4:])
-			cachedFlags := binary.BigEndian.Uint16(vm.bytecode[cachePos+6:])
-			vm.ip += 8
+			icNodeID := binary.BigEndian.Uint16(vm.bytecode[vm.ip:])
+			vm.ip += 2
 			target := vm.pop()
-			if value, ok := vm.jsICMemberGet(target, vm.constants[nameIdx].Str, cachedShape, cachedSlot, cachedFlags); ok {
-				vm.push(value)
-				continue
+			if int(icNodeID) < len(vm.icState) {
+				cached := vm.icState[icNodeID]
+				if value, ok := vm.jsICMemberGet(target, vm.constants[nameIdx].Str, cached.ShapeID, cached.Slot, cached.Flags); ok {
+					vm.push(value)
+					continue
+				}
 			}
-			vm.jsICPopulate(cachePos, target, vm.constants[nameIdx].Str)
+			vm.jsICPopulate(icNodeID, target, vm.constants[nameIdx].Str)
 			if value, deferred := vm.jsMemberGet(target, vm.constants[nameIdx].Str); !deferred {
 				vm.push(value)
 			}
@@ -4159,18 +4185,18 @@ aspExecLoop:
 		case OpJSMemberSet:
 			nameIdx := binary.BigEndian.Uint16(vm.bytecode[vm.ip:])
 			vm.ip += 2
-			cachePos := vm.ip
-			cachedShape := binary.BigEndian.Uint32(vm.bytecode[cachePos:])
-			cachedSlot := binary.BigEndian.Uint16(vm.bytecode[cachePos+4:])
-			cachedFlags := binary.BigEndian.Uint16(vm.bytecode[cachePos+6:])
-			vm.ip += 8
+			icNodeID := binary.BigEndian.Uint16(vm.bytecode[vm.ip:])
+			vm.ip += 2
 			value := vm.pop()
 			target := vm.pop()
-			if vm.jsICMemberSet(target, vm.constants[nameIdx].Str, value, cachedShape, cachedSlot, cachedFlags) {
-				continue
+			if int(icNodeID) < len(vm.icState) {
+				cached := vm.icState[icNodeID]
+				if vm.jsICMemberSet(target, vm.constants[nameIdx].Str, value, cached.ShapeID, cached.Slot, cached.Flags) {
+					continue
+				}
 			}
 			vm.jsMemberSet(target, vm.constants[nameIdx].Str, value)
-			vm.jsICPopulate(cachePos, target, vm.constants[nameIdx].Str)
+			vm.jsICPopulate(icNodeID, target, vm.constants[nameIdx].Str)
 
 		case OpJSCall:
 			argCount := int(binary.BigEndian.Uint16(vm.bytecode[vm.ip:]))

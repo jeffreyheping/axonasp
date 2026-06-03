@@ -378,6 +378,10 @@ func (vm *VM) resetForReuse() {
 	vm.nextDynamicClassID = 60000
 	vm.comInitialized = false
 	vm.comThreadLocked = false
+	// Zero-fill icState for fresh execution.
+	for i := range vm.icState {
+		vm.icState[i] = InlineCacheSlot{}
+	}
 }
 
 func (vm *VM) resetGlobals() {

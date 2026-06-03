@@ -258,6 +258,8 @@ type Compiler struct {
 	jsLocalSlotCount      int               // Number of local slots allocated for current function
 	jsInGeneratorFunction bool              // True when compiling a generator body.
 	jsCompileLineAnchors  []jscriptCompileLineAnchor
+	jsNextICNodeID        uint32 // Next available inline cache node ID for JScript AST nodes
+	jsICNodeCount         uint32 // Total inline cache nodes assigned across the program
 	// withDepth tracks nesting level of With...End With blocks at compile time.
 	// A value > 0 enables the leading-dot '.' statement and expression syntax.
 	withDepth          int
@@ -1972,11 +1974,6 @@ func (c *Compiler) emit(op OpCode, operands ...int) int {
 	if op == OpCallMember {
 		// Inline cache slot reserved for VM monomorphic call-site caching.
 		c.bytecode = append(c.bytecode, 0, 0, 0, 0)
-	}
-	if op == OpJSMemberGet || op == OpJSMemberSet {
-		// Reserve 8-byte monomorphic inline cache payload:
-		// shapeID(4), slot(2), flags(2).
-		c.bytecode = append(c.bytecode, 0, 0, 0, 0, 0, 0, 0, 0)
 	}
 
 	return pos
