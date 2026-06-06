@@ -70,6 +70,14 @@ function GetAxonCssHref() {
     return cssHref;
 }
 
+function EnsureDataFolder() {
+    var fso = Server.CreateObject("Scripting.FileSystemObject");
+    if (!fso.FolderExists(G3PIX_DATA_DIR_FS)) {
+        fso.CreateFolder(G3PIX_DATA_DIR_FS);
+    }
+    fso = null;
+}
+
 function EnsureUploadFolder() {
     var fso = Server.CreateObject("Scripting.FileSystemObject");
     if (!fso.FolderExists(G3PIX_UPLOAD_DIR_FS)) {

@@ -40,6 +40,7 @@ function EnsureDbColumn(db, tableName, columnName, columnDefinition) {
 }
 
 function EnsureSchemaAndSeed() {
+    EnsureDataFolder();
     EnsureUploadFolder();
 
     var db = OpenCmsDb();

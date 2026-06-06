@@ -10198,9 +10198,10 @@ func (vm *VM) jsLooseEqual(a Value, b Value) Value {
 		return NewBool(true)
 	}
 
-	// 1. null == undefined
-	aNullish := a.Type == VTNull || a.Type == VTJSUndefined
-	bNullish := b.Type == VTNull || b.Type == VTJSUndefined
+	// 1. null == undefined (and VTEmpty, which is VBScript's "Empty", is treated
+	//    as a JS-side absence-of-value when returned from native Go methods).
+	aNullish := a.Type == VTNull || a.Type == VTJSUndefined || a.Type == VTEmpty
+	bNullish := b.Type == VTNull || b.Type == VTJSUndefined || b.Type == VTEmpty
 	if aNullish && bNullish {
 		return NewBool(true)
 	}
