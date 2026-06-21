@@ -417,36 +417,32 @@ func (c *Compiler) parseStatement() {
 			return
 		}
 
-		if strings.EqualFold(name, "Print") {
+		if strings.EqualFold(name, "Print") && !c.matchPunctuation(vbscript.PunctEqual) && !c.matchPunctuation(vbscript.PunctDot) && !c.matchPunctuation(vbscript.PunctLParen) {
 			c.parsePrintStatementAfterPrint()
 			return
 		}
-		if strings.EqualFold(name, "Write") {
+		if strings.EqualFold(name, "Write") && !c.matchPunctuation(vbscript.PunctEqual) && !c.matchPunctuation(vbscript.PunctDot) && !c.matchPunctuation(vbscript.PunctLParen) {
 			c.parseWriteStatementAfterWrite()
 			return
 		}
-		if strings.EqualFold(name, "Close") {
+		if strings.EqualFold(name, "Close") && !c.matchPunctuation(vbscript.PunctEqual) && !c.matchPunctuation(vbscript.PunctDot) && !c.matchPunctuation(vbscript.PunctLParen) {
 			c.parseCloseStatementAfterClose()
 			return
 		}
-		if strings.EqualFold(name, "Input") {
+		if strings.EqualFold(name, "Input") && !c.matchPunctuation(vbscript.PunctEqual) && !c.matchPunctuation(vbscript.PunctDot) && !c.matchPunctuation(vbscript.PunctLParen) {
 			c.parseInputStatementAfterInput()
 			return
 		}
-		if strings.EqualFold(name, "Line") {
-			if c.matchKeywordOrIdentifier(vbscript.KeywordInput, "input") {
-				c.move()
-				c.parseLineInputStatement()
-			} else {
-				panic(c.vbCompileError(vbscript.ExpectedIdentifier, "Expected 'Input' after 'Line'"))
-			}
+		if strings.EqualFold(name, "Line") && c.matchKeywordOrIdentifier(vbscript.KeywordInput, "input") {
+			c.move()
+			c.parseLineInputStatement()
 			return
 		}
-		if strings.EqualFold(name, "Put") {
+		if strings.EqualFold(name, "Put") && !c.matchPunctuation(vbscript.PunctEqual) && !c.matchPunctuation(vbscript.PunctDot) && !c.matchPunctuation(vbscript.PunctLParen) {
 			c.parsePutStatementAfterPut()
 			return
 		}
-		if strings.EqualFold(name, "Get") {
+		if strings.EqualFold(name, "Get") && !c.matchPunctuation(vbscript.PunctEqual) && !c.matchPunctuation(vbscript.PunctDot) && !c.matchPunctuation(vbscript.PunctLParen) {
 			c.parseGetStatementAfterGet()
 			return
 		}
