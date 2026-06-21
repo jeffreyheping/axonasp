@@ -309,3 +309,44 @@ func TestCoerceInt64BankersRounding(t *testing.T) {
 		}
 	}
 }
+
+// TestVMLessThanOperatorSemantics verifies that OpLt (<) uses compareValues for proper
+// Null propagation, string comparison, and mixed-type handling, matching Classic VBScript.
+// Regression: OpLt previously used asFloat which broke Null semantics and Option Compare Text.
+func TestVMLessThanOperatorSemantics(t *testing.T) {
+	cases := []struct {
+		script string
+		want   string
+	}{
+		// Null propagation: Null < anything → Null, anything < Null → Null
+		{`<% Dim x : x = Null %><%= x < 5 %>|<%= 5 < x %>|<%= x < x %>`, "Null|Null|Null"},
+		// String comparison (binary mode): "b" < "a" → False
+		{`<%= "b" < "a" %>|<%= "a" < "b" %>`, "False|True"},
+		// Numeric comparison
+		{`<%= 2 < 3 %>|<%= 5 < 3 %>|<%= 3 < 3 %>`, "True|False|False"},
+		// Mixed numeric-string comparison: "5" coerces to 5
+		{`<%= "3" < 5 %>|<%= 5 < "3" %>`, "True|False"},
+		// Empty vs numeric: Empty < 1 → True (Empty coerces to 0)
+		{`<% Dim e : e = Empty %><%= e < 1 %>|<%= e < 0 %>`, "True|False"},
+		// Date comparison
+		{`<%= #2025-01-01# < #2026-01-01# %>`, "True"},
+	}
+
+	for _, tc := range cases {
+		compiler := NewASPCompiler(tc.script)
+		if err := compiler.Compile(); err != nil {
+			t.Fatalf("compile failed for %q: %v", tc.script, err)
+		}
+		vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
+		host := NewMockHost()
+		var output bytes.Buffer
+		host.SetOutput(&output)
+		vm.SetHost(host)
+		if err := vm.Run(); err != nil {
+			t.Fatalf("run failed for %q: %v", tc.script, err)
+		}
+		if got := output.String(); got != tc.want {
+			t.Errorf("script %q: got %q, want %q", tc.script, got, tc.want)
+		}
+	}
+}

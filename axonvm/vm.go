@@ -3793,7 +3793,13 @@ aspExecLoop:
 			vm.sp--
 
 		case OpLt:
-			vm.stack[vm.sp-1] = NewBool(vm.asFloat(vm.stack[vm.sp-1]) < vm.asFloat(vm.stack[vm.sp]))
+			a := vm.stack[vm.sp-1]
+			b := vm.stack[vm.sp]
+			if isNull(a) || isNull(b) {
+				vm.stack[vm.sp-1] = NewNull()
+			} else {
+				vm.stack[vm.sp-1] = NewBool(vm.compareValues(a, b) < 0)
+			}
 			vm.sp--
 
 		case OpNeg:
