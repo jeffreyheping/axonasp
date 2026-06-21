@@ -141,7 +141,8 @@ func (v Value) String() string {
 	case VTBuiltin:
 		return fmt.Sprintf("[Builtin:%d]", v.Num)
 	case VTDate:
-		return time.Unix(0, v.Num).UTC().Format(time.RFC3339)
+		defaults := loadBuiltinDefaults()
+		return localizedDateString(time.Unix(0, v.Num).In(defaults.location), builtinLocaleProfileForLCID(defaults.mslcid))
 	case VTUserSub:
 		return "[UserSub]"
 	case VTJSUndefined:

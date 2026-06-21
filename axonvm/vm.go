@@ -6100,6 +6100,32 @@ func (vm *VM) dispatchNativeCall(objID int64, member string, args []Value) Value
 				return Value{Type: VTEmpty}
 			}
 			return NewString(response.GetStatus())
+		case strings.EqualFold(member, "LCID"):
+			if len(args) >= 1 {
+				session := vm.host.Session()
+				if session != nil {
+					session.SetLCID(vm.asInt(args[0]))
+				}
+				return Value{Type: VTEmpty}
+			}
+			session := vm.host.Session()
+			if session != nil {
+				return NewInteger(int64(session.GetLCID()))
+			}
+			return NewInteger(0)
+		case strings.EqualFold(member, "CodePage"):
+			if len(args) >= 1 {
+				session := vm.host.Session()
+				if session != nil {
+					session.SetCodePage(vm.asInt(args[0]))
+				}
+				return Value{Type: VTEmpty}
+			}
+			session := vm.host.Session()
+			if session != nil {
+				return NewInteger(int64(session.GetCodePage()))
+			}
+			return NewInteger(0)
 		case strings.EqualFold(member, "IsClientConnected"):
 			return NewBool(response.IsClientConnected())
 		case strings.EqualFold(member, "Cookies"):
@@ -7253,6 +7279,11 @@ func (vm *VM) dispatchMemberGet(target Value, member string) Value {
 			return NewString(vm.host.Response().GetStatus())
 		case strings.EqualFold(member, "IsClientConnected"):
 			return NewBool(vm.host.Response().IsClientConnected())
+		case strings.EqualFold(member, "LCID"):
+			if vm.host != nil && vm.host.Session() != nil {
+				return NewInteger(int64(vm.host.Session().GetLCID()))
+			}
+			return NewInteger(0)
 		case strings.EqualFold(member, "Cookies"):
 			return Value{Type: VTNativeObject, Num: nativeResponseCookies}
 		}
@@ -7601,6 +7632,14 @@ func (vm *VM) dispatchMemberSet(objID int64, member string, val Value) {
 			vm.host.Response().SetPICS(val.String())
 		case strings.EqualFold(member, "Status"):
 			vm.host.Response().SetStatus(val.String())
+		case strings.EqualFold(member, "LCID"):
+			if vm.host != nil && vm.host.Session() != nil {
+				vm.host.Session().SetLCID(vm.asInt(val))
+			}
+		case strings.EqualFold(member, "CodePage"):
+			if vm.host != nil && vm.host.Session() != nil {
+				vm.host.Session().SetCodePage(vm.asInt(val))
+			}
 		}
 		return
 	}

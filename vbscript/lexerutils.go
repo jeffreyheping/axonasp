@@ -163,8 +163,11 @@ func GetKeywordAsIdentifier(s string) (Keyword, bool) {
 	return kw, ok
 }
 
-// GetDate parses a date string and returns a time.Time
-// Note: This is a basic implementation. VBScript date parsing may be more complex.
+// GetDate parses a date literal string (#...#) and returns a time.Time.
+// CRITICAL: VBScript date literals MUST always be interpreted as US date format
+// (M/D/YYYY) or ISO 8601 (YYYY-M-D), regardless of the system locale or LCID setting.
+// This function is used ONLY by the lexer for date literal tokenization.
+// Runtime date parsing (CDate, DateValue, etc.) uses locale-aware functions instead.
 func GetDate(s string) (time.Time, error) {
 	// Normalize the date string: remove extra spaces around delimiters
 	// VBScript allows dates like "1 / 1 / 2023" with spaces

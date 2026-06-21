@@ -819,3 +819,154 @@ func TestBuiltinTimeFormatting(t *testing.T) {
 		t.Fatalf("expected Now() string to include both date and time, got %q", nowStr)
 	}
 }
+
+// TestBuiltinDateStringLocaleFormatting verifies that VTDate values are converted
+// to strings using the active LCID locale settings via both vm.valueToString
+// and the generic Value.String() method.
+func TestBuiltinDateStringLocaleFormatting(t *testing.T) {
+	// Create a fixed date: March 4, 2026 14:30:00 UTC
+	testDate := time.Date(2026, time.March, 4, 14, 30, 0, 0, time.UTC)
+	dateVal := NewDate(testDate)
+
+	// Verify Value.String() uses locale-aware formatting (not RFC3339).
+	// The default LCID in config is 1033 (EnglishUS).
+	rawStr := dateVal.String()
+	if rawStr == "" {
+		t.Fatal("Value.String() on VTDate returned empty")
+	}
+	if strings.Contains(rawStr, "T") && strings.Contains(rawStr, "Z") {
+		t.Fatalf("Value.String() should NOT return RFC3339 for VTDate, got %q", rawStr)
+	}
+	// US locale should format as "3/4/2026 2:30:00 PM" (or similar)
+	if !strings.Contains(rawStr, "2026") {
+		t.Fatalf("Value.String() for date should contain the year, got %q", rawStr)
+	}
+
+	// Verify CStr(date) uses locale-aware formatting
+	vm := NewVM(nil, nil, 5)
+	host := NewMockHost()
+	vm.SetHost(host)
+	host.Session().SetLCID(int(EnglishUS))
+
+	cstr := callBuiltin(t, vm, "CStr", dateVal)
+	if cstr.Type != VTString {
+		t.Fatalf("expected VTString from CStr(date), got %#v", cstr)
+	}
+	if strings.Contains(cstr.Str, "T") && strings.Contains(cstr.Str, "Z") {
+		t.Fatalf("CStr(date) should not return RFC3339, got %q", cstr.Str)
+	}
+	if !strings.Contains(cstr.Str, "2026") {
+		t.Fatalf("CStr(date) should contain the year, got %q", cstr.Str)
+	}
+}
+
+// TestBuiltinDateStringAcrossLocales verifies date-to-string conversion
+// produces different formats for different LCID settings.
+func TestBuiltinDateStringAcrossLocales(t *testing.T) {
+	testDate := time.Date(2026, time.March, 4, 14, 30, 0, 0, time.UTC)
+	dateVal := NewDate(testDate)
+
+	tests := []struct {
+		name        string
+		lcid        MSLCID
+		contains    string // substring that must appear in the formatted output
+		notContains string // substring that must NOT appear
+	}{
+		{
+			name:        "EnglishUS",
+			lcid:        EnglishUS,
+			contains:    "3/4/2026",
+			notContains: "RFC3339",
+		},
+		{
+			name:        "PortugueseBrazil",
+			lcid:        PortugueseBrazil,
+			contains:    "2026",
+			notContains: "T",
+		},
+		{
+			name:        "GermanGermany",
+			lcid:        GermanGermany,
+			contains:    "2026",
+			notContains: "T",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vm := NewVM(nil, nil, 5)
+			host := NewMockHost()
+			vm.SetHost(host)
+			host.Session().SetLCID(int(tt.lcid))
+
+			result := vm.valueToString(dateVal)
+			if result == "" {
+				t.Fatal("vm.valueToString(date) returned empty")
+			}
+			if !strings.Contains(result, tt.contains) {
+				t.Errorf("expected date string to contain %q, got %q", tt.contains, result)
+			}
+			if tt.notContains != "" && strings.Contains(result, tt.notContains) {
+				t.Errorf("date string should NOT contain %q, got %q", tt.notContains, result)
+			}
+		})
+	}
+}
+
+// TestBuiltinDateOnlyString verifies that date-only values (no time component)
+// are formatted with only the date part, not the time part.
+func TestBuiltinDateOnlyString(t *testing.T) {
+	vm := NewVM(nil, nil, 5)
+	host := NewMockHost()
+	vm.SetHost(host)
+	host.Session().SetLCID(int(EnglishUS))
+
+	// DateSerial creates a date with no time component (midnight)
+	dateOnly := callBuiltin(t, vm, "DateSerial", NewInteger(2026), NewInteger(3), NewInteger(4))
+	dateStr := vm.valueToString(dateOnly)
+
+	// Should contain date but not time separators
+	if !strings.Contains(dateStr, "2026") {
+		t.Fatalf("expected date-only string to contain year, got %q", dateStr)
+	}
+	// A pure date (midnight) should omit the time part
+	if strings.Contains(dateStr, ":") {
+		t.Fatalf("expected date-only string to omit time, got %q", dateStr)
+	}
+
+	// TimeSerial creates a time anchored to 1899-12-30
+	timeOnly := callBuiltin(t, vm, "TimeSerial", NewInteger(14), NewInteger(30), NewInteger(0))
+	timeStr := vm.valueToString(timeOnly)
+
+	// Should NOT contain 1899 (base date should be hidden)
+	if strings.Contains(timeStr, "1899") {
+		t.Fatalf("expected time-only string to omit base date, got %q", timeStr)
+	}
+	if !strings.Contains(timeStr, ":") {
+		t.Fatalf("expected time-only string to contain time, got %q", timeStr)
+	}
+}
+
+// TestBuiltinImplicitDateStringCoercion verifies that implicit string coercion
+// of dates (via concatenation) uses locale-aware formatting.
+func TestBuiltinImplicitDateStringCoercion(t *testing.T) {
+	testDate := time.Date(2026, time.March, 4, 14, 30, 0, 0, time.UTC)
+	dateVal := NewDate(testDate)
+
+	vm := NewVM(nil, nil, 5)
+	host := NewMockHost()
+	vm.SetHost(host)
+	host.Session().SetLCID(int(EnglishUS))
+
+	// Simulate string concatenation: date & ""
+	concatResult := vm.concatValues(dateVal, NewString(""))
+	if concatResult.Type != VTString {
+		t.Fatalf("expected VTString from date concatenation, got %#v", concatResult)
+	}
+	if strings.Contains(concatResult.Str, "T") && strings.Contains(concatResult.Str, "Z") {
+		t.Fatalf("date concatenation should not use RFC3339, got %q", concatResult.Str)
+	}
+	if !strings.Contains(concatResult.Str, "2026") {
+		t.Fatalf("date concatenation should contain year, got %q", concatResult.Str)
+	}
+}
