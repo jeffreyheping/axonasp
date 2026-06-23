@@ -470,8 +470,36 @@ func (c *Compiler) parseStatement() {
 			if c.compileImplicitClassStatementCall(name, true) {
 				return
 			}
-			op, idx := c.resolveVar(name)
-			loadPos := c.emit(op, idx)
+			// Detect forward function/sub calls inside local scopes.
+			// Bare calls like "foo()" where foo is not yet a known local or
+			// declared global must resolve as OpGetGlobal so the forward-call
+			// patching mechanism (patchForwardCallSites) can rewrite the load
+			// when the target Sub/Function is defined later in source.
+			forceGlobal := false
+			if c.isLocal && c.currentClassName == "" {
+				lower := strings.ToLower(strings.TrimSpace(name))
+				if _, localExists := c.locals.Get(name); !localExists {
+					if _, isStatic := c.staticLocals[lower]; !isStatic {
+						if _, globalExists := c.Globals.Get(name); !globalExists || !c.declaredGlobals[lower] {
+							forceGlobal = true
+						}
+					}
+				}
+			}
+			var op OpCode
+			var idx int
+			var loadPos int
+			if forceGlobal {
+				idx, exists := c.Globals.Get(name)
+				if !exists {
+					idx = c.Globals.Add(name)
+				}
+				op = OpGetGlobal
+				loadPos = c.emit(op, idx)
+			} else {
+				op, idx = c.resolveVar(name)
+				loadPos = c.emit(op, idx)
+			}
 			argCount := c.parseParenArgumentList()
 
 			if peq, ok := c.next.(*vbscript.PunctuationToken); ok && peq.Type == vbscript.PunctEqual {
