@@ -32,22 +32,24 @@ import (
 // TestASPForEachFSODrivesCollection verifies For Each over fso.Drives returns drive objects.
 func TestASPForEachFSODrivesCollection(t *testing.T) {
 	source := `<%
-Dim fso, d, enumCount, firstLetter
+Dim fso, d, enumCount, firstLetter, allLetters
 Set fso = Server.CreateObject("Scripting.FileSystemObject")
 enumCount = 0
 firstLetter = ""
+allLetters = ""
 For Each d In fso.Drives
     enumCount = enumCount + 1
     If firstLetter = "" Then
         firstLetter = d.DriveLetter
     End If
+    allLetters = allLetters & d.DriveLetter
 Next
-Response.Write fso.Drives.Count & "|" & enumCount & "|" & firstLetter
+Response.Write fso.Drives.Count & "|" & enumCount & "|" & firstLetter & "|" & allLetters
 %>`
 
 	actual := runASPAndCollectOutput(t, source)
 	parts := strings.Split(actual, "|")
-	if len(parts) != 3 {
+	if len(parts) != 4 {
 		t.Fatalf("unexpected output format: %q", actual)
 	}
 	declaredCount, err := strconv.Atoi(parts[0])
@@ -59,6 +61,7 @@ Response.Write fso.Drives.Count & "|" & enumCount & "|" & firstLetter
 		t.Fatalf("invalid enumeration count %q: %v", parts[1], err)
 	}
 	firstLetter := parts[2]
+	allLetters := parts[3]
 
 	if declaredCount != enumCount {
 		t.Fatalf("drives count mismatch: declared=%d enumerated=%d output=%q", declaredCount, enumCount, actual)
@@ -70,10 +73,33 @@ Response.Write fso.Drives.Count & "|" & enumCount & "|" & firstLetter
 		if len(firstLetter) != 1 {
 			t.Fatalf("expected first drive letter on Windows, got %q", firstLetter)
 		}
+		if enumCount > 1 {
+			seen := make(map[rune]struct{}, len(allLetters))
+			for _, ch := range allLetters {
+				seen[ch] = struct{}{}
+			}
+			if len(seen) != enumCount {
+				t.Fatalf("expected distinct DriveLetter values for each enumerated drive: letters=%q enumCount=%d output=%q", allLetters, enumCount, actual)
+			}
+		}
 		return
 	}
-	if actual != "1|1|C" {
-		t.Fatalf("unexpected non-Windows fallback drive output: got %q want %q", actual, "1|1|C")
+	if actual != "1|1|C|C" {
+		t.Fatalf("unexpected non-Windows fallback drive output: got %q want %q", actual, "1|1|C|C")
+	}
+}
+
+func TestFSODriveNameFromPathSingleLetterWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("windows-specific drive-letter behavior")
+	}
+
+	vm := NewVM(nil, nil, 0)
+	if got := vm.fsoDriveNameFromPath("d"); got != "D" {
+		t.Fatalf("expected single-letter drive name to normalize to D, got %q", got)
+	}
+	if got := vm.fsoDriveNameFromPath("E"); got != "E" {
+		t.Fatalf("expected single-letter drive name to normalize to E, got %q", got)
 	}
 }
 

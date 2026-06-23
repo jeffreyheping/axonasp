@@ -652,6 +652,16 @@ func (vm *VM) fsoDriveNameFromPath(path string) string {
 		return "C"
 	}
 
+	// Treat single-letter drive identifiers ("C", "d") as explicit drive names.
+	// Without this fast-path they can be resolved as relative paths against cwd,
+	// collapsing different drives into the current volume during enumeration.
+	if len(trimmed) == 1 {
+		ch := trimmed[0]
+		if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') {
+			return strings.ToUpper(trimmed)
+		}
+	}
+
 	if strings.HasSuffix(trimmed, ":") && len(trimmed) == 2 {
 		return strings.ToUpper(strings.TrimSuffix(trimmed, ":"))
 	}
