@@ -32,6 +32,11 @@ import (
 	"g3pix.com.br/axonasp/vbscript"
 )
 
+const (
+	// InvalidProgIDHRESULT matches COM REGDB_E_CLASSNOTREG / "Invalid class string".
+	InvalidProgIDHRESULT = -2147221005
+)
+
 // Server provides server utility methods.
 type Server struct {
 	mu            sync.RWMutex
@@ -266,11 +271,15 @@ func (s *Server) CreateObject(progID string) (ApplicationValue, error) {
 	trimmed := strings.TrimSpace(progID)
 	if trimmed == "" {
 		err := fmt.Errorf("CreateObject requires a ProgID")
-		s.SetLastError(NewVBScriptASPError(vbscript.ActiveXCannotCreateObject, "Server.CreateObject", "ASP", err.Error(), "", 0, 0))
+		aspErr := NewVBScriptASPError(vbscript.ActiveXCannotCreateObject, "Server.CreateObject", "ASP", "Invalid class string", "", 0, 0)
+		aspErr.Number = InvalidProgIDHRESULT
+		s.SetLastError(aspErr)
 		return NewApplicationEmpty(), err
 	}
 
 	err := fmt.Errorf("AxonASP cannot create object: %s", trimmed)
-	s.SetLastError(NewVBScriptASPError(vbscript.ActiveXCannotCreateObject, "Server.CreateObject", "ASP", err.Error(), "", 0, 0))
+	aspErr := NewVBScriptASPError(vbscript.ActiveXCannotCreateObject, "Server.CreateObject", "ASP", "Invalid class string", "", 0, 0)
+	aspErr.Number = InvalidProgIDHRESULT
+	s.SetLastError(aspErr)
 	return NewApplicationEmpty(), err
 }

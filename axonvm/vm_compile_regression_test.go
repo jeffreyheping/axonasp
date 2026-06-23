@@ -6876,6 +6876,93 @@ Response.Write Err.Number & "|" & Err.Description
 	}
 }
 
+// TestASPServerCreateObjectInvalidProgIDResumeNextSemantics verifies that
+// Server.CreateObject failure sets Err to Invalid ProgID HRESULT and preserves
+// classic ObjTest-style conditional flow under On Error Resume Next.
+func TestASPServerCreateObjectInvalidProgIDResumeNextSemantics(t *testing.T) {
+	source := `<%
+Dim IsObj, TestObj
+
+Sub ObjTest(strObj)
+  On Error Resume Next
+  IsObj = False
+  Set TestObj = Server.CreateObject(strObj)
+  If -2147221005 <> Err Then
+    IsObj = True
+  End If
+  Set TestObj = Nothing
+End Sub
+
+Call ObjTest("AxonASP.Does.Not.Exist")
+Response.Write CStr(IsObj) & "|" & Err.Number
+%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVMFromCompiler(compiler)
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	expected := "False|-2147221005"
+	if output.String() != expected {
+		t.Fatalf("unexpected ObjTest result: got %q want %q", output.String(), expected)
+	}
+}
+
+// TestASPServerCreateObjectResumeNextDoesNotLeakErrBetweenCalls verifies that
+// one failing CreateObject call does not mark subsequent valid calls as unavailable.
+func TestASPServerCreateObjectResumeNextDoesNotLeakErrBetweenCalls(t *testing.T) {
+	source := `<%
+Dim IsObj, TestObj
+
+Sub ObjTest(strObj)
+  On Error Resume Next
+  IsObj = False
+  Set TestObj = Server.CreateObject(strObj)
+  If -2147221005 <> Err Then
+    IsObj = True
+  End If
+  Set TestObj = Nothing
+End Sub
+
+Call ObjTest("AxonASP.Does.Not.Exist")
+Response.Write CStr(IsObj) & "|"
+Call ObjTest("Scripting.FileSystemObject")
+Response.Write CStr(IsObj)
+%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVMFromCompiler(compiler)
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	expected := "False|True"
+	if output.String() != expected {
+		t.Fatalf("unexpected sequential ObjTest result: got %q want %q", output.String(), expected)
+	}
+}
+
 // TestASPIsOperatorObjectReferenceSemantics verifies Is/Is Not for object references and null values.
 func TestASPIsOperatorObjectReferenceSemantics(t *testing.T) {
 	source := `<%

@@ -32,7 +32,7 @@ import (
 	"sync"
 	"testing"
 
-	"g3pix.com.br/axonasp/vbscript"
+	"g3pix.com.br/axonasp/axonvm/asp"
 )
 
 // TestVMServerEncodingDispatch verifies native Server encoding method dispatch.
@@ -142,10 +142,12 @@ func TestVMServerGetLastError(t *testing.T) {
 	vm.SetHost(host)
 
 	// Use an unsupported ProgID to guarantee Server.CreateObject sets LastError.
+	vm.onResumeNext = true
 	vm.dispatchNativeCall(2, "CreateObject", []Value{NewString("AxonASP.Unknown.Component")})
+	vm.onResumeNext = false
 
 	number := vm.dispatchNativeCall(2, "GetLastError", []Value{NewString("Number")})
-	if number.Type != VTInteger || number.Num != int64(vbscript.HRESULTFromVBScriptCode(vbscript.ActiveXCannotCreateObject)) {
+	if number.Type != VTInteger || number.Num != int64(asp.InvalidProgIDHRESULT) {
 		t.Fatalf("unexpected error number: %#v", number)
 	}
 

@@ -696,6 +696,9 @@ func vbsCompatWeekdayName(vm *VM, args []Value) (Value, error) {
 // the function's return value rather than the raw function reference.
 func resolveCallable(vm *VM, v Value) Value {
 	if v.Type == VTNativeObject && vm != nil {
+		if v.Num == nativeObjectErr {
+			return vm.errPropertyValue("Number")
+		}
 		if collectionValue, exists := vm.requestCollectionValueItems[v.Num]; exists {
 			return NewString(collectionValue.Joined())
 		}

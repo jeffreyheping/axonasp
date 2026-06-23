@@ -74,8 +74,8 @@ func TestServerCreateObjectError(t *testing.T) {
 	}
 
 	lastError := server.GetLastError()
-	if lastError.Number != vbscript.HRESULTFromVBScriptCode(vbscript.ActiveXCannotCreateObject) {
-		t.Fatalf("expected error number 429, got %d", lastError.Number)
+	if lastError.Number != InvalidProgIDHRESULT {
+		t.Fatalf("expected Invalid ProgID HRESULT, got %d", lastError.Number)
 	}
 	if lastError.ASPCode != int(vbscript.ActiveXCannotCreateObject) {
 		t.Fatalf("expected ASP code 429, got %d", lastError.ASPCode)

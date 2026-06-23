@@ -6489,6 +6489,9 @@ func (vm *VM) dispatchNativeCall(objID int64, member string, args []Value) Value
 			return NewInteger(int64(server.GetScriptTimeout()))
 		case strings.EqualFold(member, "CreateObject"):
 			if len(args) >= 1 {
+				// VBScript compatibility: each CreateObject attempt starts with a clean Err state.
+				// If object creation fails, vm.raise repopulates Err for Resume Next checks.
+				vm.errClear()
 				progID := strings.TrimSpace(args[0].String())
 				progIDKey := strings.ToLower(progID)
 				if progIDKey == "g3stringbuilder" {
@@ -6631,16 +6634,24 @@ func (vm *VM) dispatchNativeCall(objID int64, member string, args []Value) Value
 				}
 				value, err := server.CreateObject(progID)
 				if err != nil {
-					server.SetLastError(asp.NewVBScriptASPError(vbscript.ActiveXCannotCreateObject, "Server.CreateObject", "ASP", err.Error(), "", 0, 0))
+					aspErr := asp.NewVBScriptASPError(vbscript.ActiveXCannotCreateObject, "Server.CreateObject", "ASP", "Invalid class string", "", 0, 0)
+					aspErr.Number = asp.InvalidProgIDHRESULT
+					server.SetLastError(aspErr)
+					vm.raise(vbscript.ActiveXCannotCreateObject, "Invalid class string")
 					return Value{Type: VTEmpty}
 				}
 				resolved := vm.applicationValueToValue(value)
 				if resolved.Type == VTEmpty {
-					server.SetLastError(asp.NewVBScriptASPError(vbscript.ActiveXCannotCreateObject, "Server.CreateObject", "ASP", vbscript.ActiveXCannotCreateObject.String(), "", 0, 0))
+					aspErr := asp.NewVBScriptASPError(vbscript.ActiveXCannotCreateObject, "Server.CreateObject", "ASP", "Invalid class string", "", 0, 0)
+					aspErr.Number = asp.InvalidProgIDHRESULT
+					server.SetLastError(aspErr)
+					vm.raise(vbscript.ActiveXCannotCreateObject, "Invalid class string")
+					return Value{Type: VTEmpty}
 				}
 				return resolved
 			}
 			_, _ = server.CreateObject("")
+			vm.raise(vbscript.ActiveXCannotCreateObject, "Invalid class string")
 			return Value{Type: VTEmpty}
 		case strings.EqualFold(member, "GetLastError"):
 			errObj := server.GetLastError()
@@ -9507,6 +9518,9 @@ func (vm *VM) raise(code vbscript.VBSyntaxErrorCode, msg string) {
 		Description:    description,
 		Number:         vbscript.HRESULTFromVBScriptCode(code),
 		Source:         "VBScript runtime error",
+	}
+	if code == vbscript.ActiveXCannotCreateObject {
+		vme.Number = asp.InvalidProgIDHRESULT
 	}
 
 	vm.errSetFromVMError(vme)
