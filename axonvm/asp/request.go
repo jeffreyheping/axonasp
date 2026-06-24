@@ -850,17 +850,16 @@ func parseCookieSubKeys(rawValue string) map[string]string {
 			continue
 		}
 		pair := strings.SplitN(trimmedPart, "=", 2)
-		if len(pair) == 0 {
+		// Only segments that contain '=' represent key=value sub-key pairs.
+		// Plain values (e.g. "abc123") are not sub-keys.
+		if len(pair) < 2 {
 			continue
 		}
 		key := strings.ToLower(strings.TrimSpace(pair[0]))
 		if key == "" {
 			continue
 		}
-		value := ""
-		if len(pair) > 1 {
-			value = strings.TrimSpace(pair[1])
-		}
+		value := strings.TrimSpace(pair[1])
 		parsed[key] = value
 	}
 	return parsed

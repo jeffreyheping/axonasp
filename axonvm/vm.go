@@ -3948,12 +3948,21 @@ aspExecLoop:
 			argCount := int(binary.BigEndian.Uint16(vm.bytecode[vm.ip:]))
 			vm.ip += 2
 
+			// __AXON_ENUM_VALUES must receive native objects (e.g.
+			// RequestCollectionValue) uncoerced so For Each can enumerate
+			// sub-keys. The compiler removes OpCoerceToValue before the
+			// call, so we also skip resolveCallable here.
+			targetPeek := vm.stack[vm.sp-argCount]
+			skipResolve := targetPeek.Type == VTBuiltin && targetPeek.Num == builtinEnumValuesIdx
+
 			callArgs := vm.ensureArgBuffer(argCount)
 			hasArgRef := false
 			for i := argCount - 1; i >= 0; i-- {
 				v := vm.pop()
 				if v.Type == VTArgRef {
 					hasArgRef = true
+					callArgs[i] = v
+				} else if skipResolve {
 					callArgs[i] = v
 				} else {
 					callArgs[i] = resolveCallable(vm, v)
@@ -5804,6 +5813,34 @@ func (vm *VM) dispatchNativeCall(objID int64, member string, args []Value) Value
 				}
 			}
 			return NewString("")
+		}
+		return Value{Type: VTEmpty}
+	}
+
+	// Response cookie items: Response.Cookies(name)(subkey) = value (set) / get.
+	if cookieName, exists := vm.responseCookieItems[objID]; exists {
+		switch {
+		case member == "":
+			if len(args) >= 2 {
+				// Sub-key set: Response.Cookies(name)(subkey) = value
+				vm.host.Response().SetCookieSubKey(cookieName, args[0].String(), args[len(args)-1].String())
+				return Value{Type: VTEmpty}
+			}
+			if len(args) == 1 {
+				// Sub-key get: Response.Cookies(name)(subkey)
+				return NewString(vm.host.Response().GetCookieSubKey(cookieName, args[0].String()))
+			}
+			// Default get: Response.Cookies(name)
+			return NewString(vm.host.Response().GetCookieValue(cookieName))
+		case strings.EqualFold(member, "Domain"), strings.EqualFold(member, "Path"),
+			strings.EqualFold(member, "Expires"), strings.EqualFold(member, "Secure"),
+			strings.EqualFold(member, "HttpOnly"), strings.EqualFold(member, "Value"),
+			strings.EqualFold(member, "Name"):
+			if len(args) >= 1 {
+				vm.host.Response().SetCookieProperty(cookieName, member, args[len(args)-1].String())
+				return Value{Type: VTEmpty}
+			}
+			return NewString(vm.host.Response().GetCookieProperty(cookieName, member))
 		}
 		return Value{Type: VTEmpty}
 	}

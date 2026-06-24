@@ -603,6 +603,9 @@ func (c *Compiler) parseStatement() {
 					c.emit(OpPop)
 				} else {
 					c.emit(OpCallMember, midx, argCount)
+					if c.parseStatementCallChain() {
+						return
+					}
 					c.emit(OpPop)
 				}
 			} else {
@@ -2938,6 +2941,7 @@ func (c *Compiler) parseForEachStatement() {
 
 	c.emitBuiltinTarget("__AXON_ENUM_VALUES")
 	c.parseExpression(PrecNone)
+	c.undoTrailingCoerce() // strip OpCoerceToValue so native objects (e.g. RequestCollectionValue) reach __AXON_ENUM_VALUES intact
 	c.emit(OpCall, 1)
 	c.emitSetForName(enumName)
 

@@ -551,6 +551,56 @@ func (r *Response) SetCookieProperty(cookieName string, propertyName string, pro
 	}
 }
 
+// SetCookieSubKey appends or updates a sub-key value within the cookie value using
+// key=value&key=value encoding compatible with Classic ASP cookie sub-keys.
+func (r *Response) SetCookieSubKey(cookieName string, subKey string, value string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.flushed {
+		return
+	}
+
+	key := strings.ToLower(cookieName)
+	cookie, exists := r.cookies[key]
+	if !exists {
+		cookie = &ResponseCookie{Name: cookieName, Path: "/"}
+		r.cookies[key] = cookie
+		r.cookieOrder = append(r.cookieOrder, cookieName)
+	}
+
+	// Parse existing sub-keys from the current value.
+	subKeys := parseCookieSubKeys(cookie.Value)
+	if subKeys == nil {
+		subKeys = make(map[string]string)
+	}
+	subKeys[strings.ToLower(subKey)] = value
+
+	// Rebuild value as ordered key=value pairs separated by &.
+	var parts []string
+	for k, v := range subKeys {
+		parts = append(parts, k+"="+v)
+	}
+	cookie.Value = strings.Join(parts, "&")
+}
+
+// GetCookieSubKey returns the sub-key value from a cookie value encoded as
+// key=value&key=value, or empty string if the sub-key does not exist.
+func (r *Response) GetCookieSubKey(cookieName string, subKey string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	cookie, exists := r.cookies[strings.ToLower(cookieName)]
+	if !exists {
+		return ""
+	}
+
+	subKeys := parseCookieSubKeys(cookie.Value)
+	if subKeys == nil {
+		return ""
+	}
+	return subKeys[strings.ToLower(subKey)]
+}
+
 // GetCookieProperty returns one cookie property by name.
 func (r *Response) GetCookieProperty(cookieName string, propertyName string) string {
 	r.mu.RLock()

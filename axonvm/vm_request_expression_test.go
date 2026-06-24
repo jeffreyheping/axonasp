@@ -615,3 +615,87 @@ Response.Write Err.Number
 		t.Fatalf("unexpected Err.Number output: got %q want %q", output.String(), expected+"|"+expected)
 	}
 }
+
+// TestForEachRequestCookiesSubKeys verifies that For Each on a keyed
+// Request.Cookies(name) enumerates the sub-key names in sorted order,
+// and that each sub-key value is accessible via Request.Cookies(name)(subkey).
+func TestForEachRequestCookiesSubKeys(t *testing.T) {
+	source := `<%
+Dim cn, kc, out
+out = ""
+For Each cn In Request.Cookies
+    If Request.Cookies(cn).HasKeys Then
+        For Each kc In Request.Cookies(cn)
+            out = out & kc & "=" & Request.Cookies(cn)(kc) & ";"
+        Next
+    End If
+Next
+Response.Write out
+%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
+	host := NewMockHost()
+	// "profile" has sub-keys: lang=en, name=lucas (sorted: lang, name)
+	host.Request().Cookies.AddCookie("profile", "lang=en&name=lucas")
+	// "sid" has no sub-keys — must be skipped by the HasKeys guard
+	host.Request().Cookies.AddCookie("sid", "abc123")
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	// Keys are emitted in sorted order by vbsAxonEnumValues.
+	const want = "lang=en;name=lucas;"
+	if output.String() != want {
+		t.Fatalf("unexpected output: got %q want %q", output.String(), want)
+	}
+}
+
+// TestForEachRequestCookiesNoSubKeys verifies that iterating over a
+// Request.Cookies(name) value that has no sub-keys yields a single-element
+// iteration containing the cookie's plain string value.
+func TestForEachRequestCookiesNoSubKeys(t *testing.T) {
+	source := `<%
+Dim cn, kc, out
+out = ""
+For Each cn In Request.Cookies
+    If Not Request.Cookies(cn).HasKeys Then
+        For Each kc In Request.Cookies(cn)
+            out = out & kc & ";"
+        Next
+    End If
+Next
+Response.Write out
+%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
+	host := NewMockHost()
+	host.Request().Cookies.AddCookie("sid", "abc123")
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	const want = "abc123;"
+	if output.String() != want {
+		t.Fatalf("unexpected output: got %q want %q", output.String(), want)
+	}
+}

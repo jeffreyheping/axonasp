@@ -71,6 +71,12 @@ var BuiltinNames []string
 var BuiltinIndex = make(map[string]int)
 var globalAxonFunctionsInitialized bool
 
+// builtinEnumValuesIdx caches the VTBuiltin.Num value for __AXON_ENUM_VALUES
+// so the OpCall handler can bypass resolveCallable for its argument, which
+// would otherwise convert native objects (e.g. RequestCollectionValue) to
+// strings before For Each enumeration can inspect them.
+var builtinEnumValuesIdx int64 = -1
+
 // lastRandomValue stores the last value returned by Rnd() for Rnd(0) calls.
 var lastRandomValue float64 = 0
 
@@ -1321,6 +1327,24 @@ func vbsAxonEnumValues(vm *VM, args []Value) (Value, error) {
 		return ValueFromVBArray(NewVBArrayFromValues(0, values)), nil
 	}
 
+	// RequestCollectionValue — enumerate sub-keys (cookie attributes) or yield the single joined value.
+	if collectionValue, ok := vm.requestCollectionValueItems[target.Num]; ok {
+		if collectionValue.HasKeys() {
+			keys := make([]string, 0, len(collectionValue.Attributes))
+			for key := range collectionValue.Attributes {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			values := make([]Value, len(keys))
+			for i, k := range keys {
+				values[i] = NewString(k)
+			}
+			return ValueFromVBArray(NewVBArrayFromValues(0, values)), nil
+		}
+		// No sub-keys: yield a single-element array with the joined value.
+		return ValueFromVBArray(NewVBArrayFromValues(0, []Value{NewString(collectionValue.Joined())})), nil
+	}
+
 	// ASP intrinsic request/response collections: enumerate as string key arrays.
 	if vm.host != nil {
 		req := vm.host.Request()
@@ -1500,6 +1524,7 @@ func init() {
 	RegisterBuiltin("__AXON_REDIM_ARRAY_VB6", bindBuiltin(vbsAxonRedimArrayVB6))
 	RegisterBuiltin("__AXON_REDIM_PRESERVE_ARRAY_VB6", bindBuiltin(vbsAxonRedimPreserveArrayVB6))
 	RegisterBuiltin("__AXON_ENUM_VALUES", vbsAxonEnumValues)
+	builtinEnumValuesIdx = int64(BuiltinIndex["__axon_enum_values"])
 	RegisterBuiltin("__AXON_ENUM_COUNT", bindBuiltin(vbsAxonEnumCount))
 	RegisterBuiltin("__AXON_ENUM_ITEM", bindBuiltin(vbsAxonEnumItem))
 
