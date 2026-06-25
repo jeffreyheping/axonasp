@@ -107,7 +107,7 @@ AxonASP is an independent software project developed by G3pix and is **not affil
 
 ## Contributors ✨
 
-Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/docs/en/emoji-key)):
+Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/docs/en/emoji-key](https://allcontributors.org/en/reference/emoji-key/)):
 
 <!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
 <!-- prettier-ignore-start -->
@@ -115,7 +115,7 @@ Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/d
 <table>
   <tbody>
     <tr>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/TMTI-Andy"><img src="https://avatars.githubusercontent.com/u/151023986?v=4?s=100" width="100px;" alt="Andrew Urquhart"/><br /><sub><b>Andrew Urquhart</b></sub></a><br /><a href="https://github.com/guimaraeslucas/axonasp/issues?q=author%3ATMTI-Andy" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/TMTI-Andy"><img src="https://avatars.githubusercontent.com/u/151023986?v=4?s=100" width="100px;" alt="Andrew Urquhart"/><br /><sub><b>Andrew Urquhart</b></sub></a><br /><a href="https://github.com/guimaraeslucas/axonasp/issues?q=author%3ATMTI-Andy" title="Bug reports">🐛</a> 💵</td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/jeffreyheping"><img src="https://avatars.githubusercontent.com/u/100673826?v=4?s=100" width="100px;" alt="Jeffrey He"/><br /><sub><b>Jeffrey He</b></sub></a><br /><a href="https://github.com/guimaraeslucas/axonasp/issues?q=author%3Ajeffreyheping" title="Bug reports">🐛</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/ikadmm"><img src="https://avatars.githubusercontent.com/u/29986197?v=4?s=100" width="100px;" alt="ikadmm"/><br /><sub><b>ikadmm</b></sub></a><br /><a href="https://github.com/guimaraeslucas/axonasp/issues?q=author%3Aikadmm" title="Bug reports">🐛</a></td>
     </tr>
