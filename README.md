@@ -116,6 +116,8 @@ Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/d
   <tbody>
     <tr>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/TMTI-Andy"><img src="https://avatars.githubusercontent.com/u/151023986?v=4?s=100" width="100px;" alt="Andrew Urquhart"/><br /><sub><b>Andrew Urquhart</b></sub></a><br /><a href="https://github.com/guimaraeslucas/axonasp/issues?q=author%3ATMTI-Andy" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/jeffreyheping"><img src="https://avatars.githubusercontent.com/u/100673826?v=4?s=100" width="100px;" alt="Jeffrey He"/><br /><sub><b>Jeffrey He</b></sub></a><br /><a href="https://github.com/guimaraeslucas/axonasp/issues?q=author%3Ajeffreyheping" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/ikadmm"><img src="https://avatars.githubusercontent.com/u/29986197?v=4?s=100" width="100px;" alt="ikadmm"/><br /><sub><b>ikadmm</b></sub></a><br /><a href="https://github.com/guimaraeslucas/axonasp/issues?q=author%3Aikadmm" title="Bug reports">🐛</a></td>
     </tr>
   </tbody>
 </table>
