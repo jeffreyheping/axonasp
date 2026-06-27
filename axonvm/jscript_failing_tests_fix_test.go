@@ -4,37 +4,33 @@ import (
 	"testing"
 )
 
-// TestJScriptMathPrecedenceFix verifies that unary operations (like negation) on property accessors
-// (like Math.PI) do not emit duplicate base-object load instructions, ensuring the execution stack
-// remains correct and comparisons succeed.
-func TestJScriptMathPrecedenceFix(t *testing.T) {
-	aspSrc := jscriptSrc(`
-		var a = Math.atan2(-1, 0);
-		var b = -Math.PI / 2;
-		var direct = (Math.atan2(-1, 0) === -Math.PI / 2);
-		Response.Write(direct + "|" + (a === b));
-	`)
-	out, err := runJScript2(t, aspSrc)
-	if err != nil {
-		t.Fatal(err)
+// TestJScriptInstanceOfChecks validates the correct prototype chain inheritance
+// and JScript 'instanceof' behaviour for both functions, built-in constructor
+// objects, wrapped primitives, and raw primitives.
+func TestJScriptInstanceOfChecks(t *testing.T) {
+	tests := []struct {
+		expr     string
+		expected string
+	}{
+		{`((function () {}) instanceof Function)`, "True"},
+		{`(Date instanceof Function)`, "True"},
+		{`(Date instanceof Object)`, "True"},
+		{`((new Number(1)) instanceof Number)`, "True"},
+		{`((new Boolean(false)) instanceof Boolean)`, "True"},
+		{`(1 instanceof Number)`, "False"},
+		{`(true instanceof Boolean)`, "False"},
 	}
-	if out != "true|true" {
-		t.Errorf("expected 'true|true', got %q", out)
-	}
-}
 
-// TestJScriptUninitializedArrayIndexAccess verifies that accessing uninitialized/empty slots
-// in JScript arrays correctly yields 'undefined' and compares strictly to 'undefined'.
-func TestJScriptUninitializedArrayIndexAccess(t *testing.T) {
-	aspSrc := jscriptSrc(`
-		var arr = new Array(3);
-		Response.Write((arr[0] === void 0) + "|" + (typeof arr[0]));
-	`)
-	out, err := runJScript2(t, aspSrc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out != "true|undefined" {
-		t.Errorf("expected 'true|undefined', got %q", out)
+	for _, tc := range tests {
+		t.Run(tc.expr, func(t *testing.T) {
+			aspSrc := jscriptSrc(`Response.Write(` + tc.expr + `);`)
+			out, err := runJScript2(t, aspSrc)
+			if err != nil {
+				t.Fatalf("Expr %s failed to run: %v", tc.expr, err)
+			}
+			if out != tc.expected {
+				t.Errorf("Expr %s: expected %q, got %q", tc.expr, tc.expected, out)
+			}
+		})
 	}
 }

@@ -55,16 +55,16 @@ try {
 		,{expected:true,				actual:(new Date()) instanceof Date}
 		,{expected:true,				actual:(new Date()) instanceof Object}
 		,{expected:true,				actual:(/abc/) instanceof RegExp}
-//☠️	,{expected:true,				actual:(function () {}) instanceof Function}
-//☠	,{expected:true,				actual:Date instanceof Function}
+	,{expected:true,				actual:(function () {}) instanceof Function}
+	,{expected:true,				actual:Date instanceof Function}
 		,{expected:true,				actual:Date instanceof Object}
 		,{expected:true,				actual:(new String("x")) instanceof String}
-//☠	,{expected:true,				actual:(new Number(1)) instanceof Number}
-//☠	,{expected:true,				actual:(new Boolean(false)) instanceof Boolean}
+	,{expected:true,				actual:(new Number(1)) instanceof Number}
+	,{expected:true,				actual:(new Boolean(false)) instanceof Boolean}
 		,{expected:false,				actual:null instanceof Object}
 		,{expected:false,				actual:"x" instanceof String}
-//☠	,{expected:false,				actual:1 instanceof Number}
-//☠	,{expected:false,				actual:true instanceof Boolean}
+	,{expected:false,				actual:1 instanceof Number}
+	,{expected:false,				actual:true instanceof Boolean}
 		,{expected:false,				actual:(function () { return arguments instanceof Array; })()}
 
 		 // Equality / strict equality oddities
@@ -87,13 +87,13 @@ try {
 		,{expected:false,				actual:false == "false"}
 		,{expected:true,				actual:true == "1"}
 		,{expected:false,				actual:true == "true"}
-//☠		,{expected:true,				actual:[] == false}
-//☠		,{expected:true,				actual:[] == 0}
-//☠		,{expected:true,				actual:[] == ""}
-//☠		,{expected:true,				actual:[0] == false}
-//☠		,{expected:true,				actual:[1] == true}
-//☠		,{expected:false,				actual:[2] == true}
-//☠		,{expected:true,				actual:[] == ![]}
+		,{expected:true,				actual:[] == false}
+	,{expected:true,				actual:[] == 0}
+	,{expected:true,				actual:[] == ""}
+,{expected:true,				actual:[0] == false}
+		,{expected:true,				actual:[1] == true}
+		,{expected:false,				actual:[2] == true}
+	,{expected:true,				actual:[] == ![]}
 		,{expected:false,				actual:{} == false}
 		,{expected:false,				actual:NaN == NaN}
 		,{expected:true,				actual:NaN != NaN}
@@ -193,12 +193,12 @@ try {
 		,{expected:"false",				actual:String(false)}
 		,{expected:"NaN",				actual:String(NaN)}
 		,{expected:"Infinity",			actual:String(Infinity)}
-//☠		,{expected:"",					actual:String([])}
-//☠		,{expected:"1,2",				actual:String([1, 2])}
+		,{expected:"",					actual:String([])}
+		,{expected:"1,2",				actual:String([1, 2])}
 		,{expected:"[object Object]",	actual:String({})}
-//☠		,{expected:"[object Object]",	actual:[] + {}}
-//☠		,{expected:"[object Object]",	actual:({}) + []}
-//🤷		,{expected:"1,23,4",			actual:[1, 2] + [3, 4]}
+		,{expected:"[object Object]",	actual:[] + {}}
+	,{expected:"[object Object]",	actual:({}) + []}
+		,{expected:"1,23,4",			actual:[1, 2] + [3, 4]}
 
 
 		 // Wrapper objects
@@ -207,7 +207,7 @@ try {
 		,{expected:"object",			actual:typeof new Boolean(false)}
 //☠		,{expected:true,				actual:new String("x") == "x"}
 		,{expected:false,				actual:new String("x") === "x"}
-//☠		,{expected:true,				actual:new Number(1) == 1}
+//☠=""		,{expected:true,				actual:new Number(1) == 1}
 		,{expected:false,				actual:new Number(1) === 1}
 //☠		,{expected:true,				actual:new Boolean(false) == false}
 		,{expected:false,				actual:new Boolean(false) === false}
@@ -270,7 +270,7 @@ try {
 		,{expected:0,					actual:Math.abs(-0)}
 
 		 // Function / eval
-//☠		,{expected:3,					actual:eval("1 + 2")}
+		,{expected:3,					actual:eval("1 + 2")}
 //☠		,{expected:7,					actual:Function("return 7")()}
 //☠		,{expected:"function",			actual:typeof Function("return 1")}
 

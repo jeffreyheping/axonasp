@@ -1534,7 +1534,8 @@ func jsCtorNeedsPrototype(ctorName string) bool {
 		"Int16Array", "Uint16Array",
 		"Int32Array", "Uint32Array",
 		"Float32Array", "Float64Array",
-		"BigInt64Array", "BigUint64Array":
+		"BigInt64Array", "BigUint64Array",
+		"Number", "Boolean", "Function":
 		return true
 	default:
 		return false
@@ -1543,7 +1544,7 @@ func jsCtorNeedsPrototype(ctorName string) bool {
 
 // jsInstanceOf implements the JScript 'instanceof' operator logic.
 func (vm *VM) jsInstanceOf(left Value, right Value) bool {
-	if right.Type != VTJSObject && right.Type != VTJSFunction && right.Type != VTJSProxy {
+	if right.Type != VTJSObject && right.Type != VTJSFunction && right.Type != VTJSProxy && right.Type != VTBuiltin {
 		vm.jsThrowTypeError("instanceof: right-hand side is not an object")
 		return false
 	}
@@ -1616,10 +1617,16 @@ func (vm *VM) jsGetPrototypeValue(v Value) Value {
 				}
 			}
 		}
-		if v.Type == VTJSFunction {
+		if v.Type == VTJSFunction || vm.jsIsCallable(v) {
 			if proto := vm.jsGetIntrinsicPrototype("Function"); proto.Type == VTJSObject {
 				return proto
 			}
+		}
+		if proto := vm.jsGetIntrinsicPrototype("Object"); proto.Type == VTJSObject {
+			if v.Type == VTJSObject && v.Num == proto.Num {
+				return Value{Type: VTJSUndefined}
+			}
+			return proto
 		}
 	}
 	if v.Type == VTJSFunction {
@@ -1848,6 +1855,7 @@ func (vm *VM) ensureJSRootEnv() {
 	bindings["String"] = vm.jsCreateIntrinsicObject("", "String")
 	bindings["Array"] = vm.jsCreateIntrinsicObject("", "Array")
 	bindings["Object"] = vm.jsCreateIntrinsicObject("", "Object")
+	bindings["Function"] = vm.jsCreateIntrinsicObject("", "Function")
 	bindings["JSON"] = vm.jsCreateIntrinsicObject("", "JSON")
 	bindings["Atomics"] = vm.jsCreateAtomicsObject()
 	bindings["Proxy"] = vm.jsCreateProxyObject()
@@ -1977,16 +1985,16 @@ func (vm *VM) ensureJSRootEnv() {
 		}
 	}
 
-	// Link constructor objects' __js_proto to Object.prototype so that
-	// instanceof Object works for built-in constructors (e.g. Date instanceof Object).
-	if objCtor, ok := bindings["Object"]; ok && objCtor.Type == VTJSObject {
-		if objProto, deferred := vm.jsMemberGet(objCtor, "prototype"); !deferred && objProto.Type == VTJSObject {
+	// Link constructor objects' __js_proto to Function.prototype so that
+	// instanceof Function and instanceof Object work for built-in constructors (e.g. Date instanceof Function).
+	if funcCtor, ok := bindings["Function"]; ok && funcCtor.Type == VTJSObject {
+		if funcProto, deferred := vm.jsMemberGet(funcCtor, "prototype"); !deferred && funcProto.Type == VTJSObject {
 			for _, ctor := range bindings {
-				if (ctor.Type == VTJSObject || ctor.Type == VTJSFunction) && ctor.Num != objCtor.Num {
+				if ctor.Type == VTJSObject || ctor.Type == VTJSFunction {
 					id := ctor.Num
 					if _, hasProto := vm.jsObjectItems[id]["__js_proto"]; !hasProto {
 						if _, hasCtor := vm.jsObjectItems[id]["__js_ctor"]; hasCtor {
-							vm.jsObjectItems[id]["__js_proto"] = objProto
+							vm.jsObjectItems[id]["__js_proto"] = funcProto
 						}
 					}
 				}
@@ -2138,6 +2146,18 @@ func (vm *VM) jsCreateNumberObject() Value {
 	vm.jsSetDescriptor(objID, "MAX_SAFE_INTEGER", jsPropertyDescriptor{Value: obj["MAX_SAFE_INTEGER"], HasValue: true, Enumerable: false, Configurable: false, Writable: false})
 	vm.jsSetDescriptor(objID, "MIN_SAFE_INTEGER", jsPropertyDescriptor{Value: obj["MIN_SAFE_INTEGER"], HasValue: true, Enumerable: false, Configurable: false, Writable: false})
 	vm.jsSetDescriptor(objID, "EPSILON", jsPropertyDescriptor{Value: obj["EPSILON"], HasValue: true, Enumerable: false, Configurable: false, Writable: false})
+
+	// Create prototype
+	ctorVal := Value{Type: VTJSObject, Num: objID}
+	proto := vm.jsCreatePrototypeObject(ctorVal)
+	vm.jsSetDescriptor(objID, "prototype", jsPropertyDescriptor{
+		Value:        proto,
+		HasValue:     true,
+		Enumerable:   false,
+		Configurable: false,
+		Writable:     false,
+	})
+
 	return Value{Type: VTJSObject, Num: objID}
 }
 
