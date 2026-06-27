@@ -205,14 +205,14 @@ try {
 		,{expected:"object",			actual:typeof new String("x")}
 		,{expected:"object",			actual:typeof new Number(1)}
 		,{expected:"object",			actual:typeof new Boolean(false)}
-//☠		,{expected:true,				actual:new String("x") == "x"}
+		,{expected:true,				actual:new String("x") == "x"}
 		,{expected:false,				actual:new String("x") === "x"}
-//☠=""		,{expected:true,				actual:new Number(1) == 1}
+		,{expected:true,				actual:new Number(1) == 1}
 		,{expected:false,				actual:new Number(1) === 1}
-//☠		,{expected:true,				actual:new Boolean(false) == false}
+		,{expected:true,				actual:new Boolean(false) == false}
 		,{expected:false,				actual:new Boolean(false) === false}
-//☠		,{expected:true,				actual:new String("") == false}
-//☠		,{expected:true,				actual:new Number(0) == false}
+		,{expected:true,				actual:new String("") == false}
+		,{expected:true,				actual:new Number(0) == false}
 
 		 // Array
 		,{expected:0,					actual:[].length}
@@ -271,8 +271,8 @@ try {
 
 		 // Function / eval
 		,{expected:3,					actual:eval("1 + 2")}
-//☠		,{expected:7,					actual:Function("return 7")()}
-//☠		,{expected:"function",			actual:typeof Function("return 1")}
+		,{expected:7,					actual:Function("return 7")()}
+		,{expected:"function",			actual:typeof Function("return 1")}
 
 		 // Object.prototype.toString
 		,{expected:"[object Object]",	actual:Object.prototype.toString.call({})}
@@ -404,7 +404,7 @@ try {
 	Response.Write("Tests Passed: " + intSuccess + "\r\n");
 	Response.Write("Tests Failed: " + (intLoopIndexMax - intSuccess) + "\r\n\r\n");
 	Response.Write("Failed tests:\r\n");
-	Response.Write(arrResults.join("\r\n") || "[None; Lucas Guimarães is amazing 😁]");
+	Response.Write(arrResults.join("\r\n") || "[None; AxonASP is amazing 😁]");
 }
 catch (err) {
 	Response.Write("Error: #" + err.number + "\r\n" + err.description);

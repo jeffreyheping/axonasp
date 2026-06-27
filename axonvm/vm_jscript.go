@@ -2007,6 +2007,36 @@ func (vm *VM) ensureJSRootEnv() {
 	rootObj := Value{Type: VTJSObject, Num: rootID}
 	vm.jsEnvItems[rootID].bindings["global"] = rootObj
 	vm.jsEnvItems[rootID].bindings["globalThis"] = rootObj
+
+	// Override valueOf and toString on String.prototype, Number.prototype, Boolean.prototype
+	overrideProtoMethod := func(protoName string, methodName string, ctorName string) {
+		proto := vm.jsGetIntrinsicPrototype(protoName)
+		if proto.Type == VTJSObject {
+			fnID := vm.allocJSID()
+			fnObj := make(map[string]Value, 4)
+			fnObj["__js_type"] = NewString("Function")
+			fnObj["__js_ctor"] = NewString(ctorName)
+			fnObj["name"] = NewString(methodName)
+			fnObj["length"] = NewInteger(0)
+			vm.jsObjectItems[fnID] = fnObj
+			vm.jsPropertyItems[fnID] = make(map[string]jsPropertyDescriptor, 4)
+
+			vm.jsSetDescriptor(proto.Num, methodName, jsPropertyDescriptor{
+				Value:        Value{Type: VTJSFunction, Num: fnID},
+				HasValue:     true,
+				Enumerable:   false,
+				Configurable: true,
+				Writable:     true,
+			})
+		}
+	}
+
+	overrideProtoMethod("String", "toString", "StringPrototypeToString")
+	overrideProtoMethod("String", "valueOf", "StringPrototypeValueOf")
+	overrideProtoMethod("Number", "toString", "NumberPrototypeToString")
+	overrideProtoMethod("Number", "valueOf", "NumberPrototypeValueOf")
+	overrideProtoMethod("Boolean", "toString", "BooleanPrototypeToString")
+	overrideProtoMethod("Boolean", "valueOf", "BooleanPrototypeValueOf")
 }
 
 // enableNodeCompatibility checks the viper configuration to determine if Node.js
@@ -5242,6 +5272,19 @@ func (vm *VM) jsPrepareMemberCallee(target Value, member string) (Value, Value, 
 }
 
 func (vm *VM) jsCallMember(target Value, member string, args []Value) (Value, bool) {
+	if target.Type == VTJSObject {
+		objType := vm.jsObjectStringProperty(target, "__js_type")
+		if objType == "String" || objType == "Number" || objType == "Boolean" {
+			if !vm.jsObjectHasOwnProperty(target, member) {
+				if obj, ok := vm.jsObjectItems[target.Num]; ok {
+					if prim, exists := obj["__js_primitive_value"]; exists {
+						target = prim
+					}
+				}
+			}
+		}
+	}
+
 	if target.Type == VTJSFunction {
 		switch {
 		case strings.EqualFold(member, "call"):
@@ -9424,6 +9467,10 @@ func (vm *VM) jsCall(callee Value, thisVal Value, args []Value) Value {
 			"SetTimeout", "ClearTimeout", "SetInterval", "ClearInterval", "SetImmediate", "ClearImmediate",
 			"ObjectToString", "ObjectToLocaleString", "ObjectValueOf":
 			return vm.dispatchJSIntrinsicCall(thisVal, ctorName, args)
+		case "StringPrototypeToString", "StringPrototypeValueOf",
+			"NumberPrototypeToString", "NumberPrototypeValueOf",
+			"BooleanPrototypeToString", "BooleanPrototypeValueOf":
+			return vm.dispatchJSPrimitiveWrapperMethod(thisVal, ctorName, args)
 		case "ReflectApply":
 			if len(args) < 1 {
 				vm.jsThrowTypeError("Reflect.apply requires at least 1 argument")
@@ -9595,6 +9642,8 @@ func (vm *VM) jsCall(callee Value, thisVal Value, args []Value) Value {
 	case VTJSObject:
 		ctorName := vm.jsObjectStringProperty(callee, "__js_ctor")
 		switch ctorName {
+		case "Function":
+			return vm.jsConstructFunction(args)
 		case "Number":
 			if len(args) == 0 {
 				return NewDouble(0)
@@ -10506,6 +10555,54 @@ func (vm *VM) jsCreateProxy(args []Value) Value {
 	return Value{Type: VTJSProxy, Num: proxyID}
 }
 
+func (vm *VM) jsConstructFunction(args []Value) Value {
+	body := ""
+	params := []string{}
+	if len(args) > 0 {
+		bodyVal := args[len(args)-1]
+		body = vm.jsToString(bodyVal)
+		for i := 0; i < len(args)-1; i++ {
+			paramVal := vm.jsToString(args[i])
+			parts := strings.SplitSeq(paramVal, ",")
+			for part := range parts {
+				trimmed := strings.TrimSpace(part)
+				if trimmed != "" {
+					params = append(params, trimmed)
+				}
+			}
+		}
+	}
+	code := "(function(" + strings.Join(params, ", ") + "){\n" + body + "\n})"
+	compiler := NewASPCompiler("")
+	compiler.sourceName = vm.sourceName
+	vm.jsPrepareDynamicCompilerIC(compiler)
+	compiler.compileJScriptEvalSnippet(code)
+	if len(compiler.bytecode) == 0 {
+		return Value{Type: VTJSUndefined}
+	}
+	vm.jsExtendICStateFromCompiler(compiler)
+	startIP := vm.appendExecuteProgram(compiler.GlobalsCount(), compiler.constants, compiler.bytecode)
+	if startIP < 0 || startIP >= len(vm.bytecode) {
+		return Value{Type: VTJSUndefined}
+	}
+	child := vm.cloneForExecuteLocal(startIP)
+	if err := child.Run(); err != nil {
+		vm.syncExecuteGlobalState(child)
+		if vmErr, ok := err.(*VMError); ok {
+			vm.jsThrowJSError(jscript.JSSyntaxErrorCode(vmErr.Code))
+			return Value{Type: VTJSUndefined}
+		}
+		vm.jsThrowTypeError(err.Error())
+		return Value{Type: VTJSUndefined}
+	}
+	resultValue := Value{Type: VTJSUndefined}
+	if child.sp >= 0 {
+		resultValue = child.stack[child.sp]
+	}
+	vm.syncExecuteGlobalState(child)
+	return resultValue
+}
+
 func (vm *VM) jsConstruct(constructor Value, args []Value, newTarget Value, isSuper bool) Value {
 	if constructor.Type == VTJSProxy {
 		if !vm.jsIsConstructor(constructor) {
@@ -10549,6 +10646,8 @@ func (vm *VM) jsConstruct(constructor Value, args []Value, newTarget Value, isSu
 	if constructor.Type == VTJSObject || constructor.Type == VTJSFunction {
 		ctorName := vm.jsObjectStringProperty(constructor, "__js_ctor")
 		switch ctorName {
+		case "Function":
+			return vm.jsConstructFunction(args)
 		case "Array":
 			if len(args) == 0 {
 				return ValueFromVBArray(NewVBArrayFromValues(0, nil))
@@ -11459,4 +11558,59 @@ func (vm *VM) jsSuperIndexGet(index Value) Value {
 
 func (vm *VM) jsSuperIndexSet(index Value, val Value) {
 	vm.jsSuperSet(vm.jsPropertyKeyFromValue(index), val)
+}
+
+func (vm *VM) dispatchJSPrimitiveWrapperMethod(thisVal Value, ctorName string, args []Value) Value {
+	var prim Value
+	if thisVal.Type == VTJSObject {
+		if obj, ok := vm.jsObjectItems[thisVal.Num]; ok {
+			if p, exists := obj["__js_primitive_value"]; exists {
+				prim = p
+			}
+		}
+	} else if thisVal.Type == VTString || thisVal.Type == VTInteger || thisVal.Type == VTDouble || thisVal.Type == VTBool {
+		prim = thisVal
+	} else {
+		vm.jsThrowTypeError("Method called on incompatible receiver")
+		return Value{Type: VTJSUndefined}
+	}
+
+	switch ctorName {
+	case "StringPrototypeToString", "StringPrototypeValueOf":
+		if prim.Type != VTString {
+			vm.jsThrowTypeError("Method called on incompatible receiver")
+			return Value{Type: VTJSUndefined}
+		}
+		return prim
+	case "NumberPrototypeToString", "NumberPrototypeValueOf":
+		if prim.Type != VTInteger && prim.Type != VTDouble {
+			vm.jsThrowTypeError("Method called on incompatible receiver")
+			return Value{Type: VTJSUndefined}
+		}
+		if ctorName == "NumberPrototypeToString" {
+			if len(args) > 0 && args[0].Type != VTJSUndefined {
+				radix := int(vm.jsToNumber(args[0]).Flt)
+				if radix < 2 || radix > 36 {
+					vm.jsThrowRangeError("toString() radix argument must be between 2 and 36")
+					return Value{Type: VTJSUndefined}
+				}
+				return NewString(vm.jsNumberToStringRadix(vm.jsToNumber(prim).Flt, radix))
+			}
+			return NewString(vm.jsNumberToString(vm.jsToNumber(prim).Flt))
+		}
+		return prim
+	case "BooleanPrototypeToString", "BooleanPrototypeValueOf":
+		if prim.Type != VTBool {
+			vm.jsThrowTypeError("Method called on incompatible receiver")
+			return Value{Type: VTJSUndefined}
+		}
+		if ctorName == "BooleanPrototypeToString" {
+			if prim.Num != 0 {
+				return NewString("true")
+			}
+			return NewString("false")
+		}
+		return prim
+	}
+	return Value{Type: VTJSUndefined}
 }
