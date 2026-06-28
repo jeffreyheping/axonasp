@@ -23,6 +23,7 @@ package axonvm
 import (
 	"bufio"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -41,6 +42,7 @@ import (
 	"golang.org/x/text/language"
 
 	"g3pix.com.br/axonasp/axonvm/asp"
+	"g3pix.com.br/axonasp/jscript"
 	"g3pix.com.br/axonasp/vbscript"
 )
 
@@ -6816,7 +6818,41 @@ func (vm *VM) dispatchNativeCall(objID int64, member string, args []Value) Value
 			if len(args) >= 1 {
 				absPath := server.MapPath(args[0].String())
 				if err := vm.host.ExecuteASPFile(absPath); err != nil {
-					server.SetLastError(asp.NewVBScriptASPError(vbscript.PathNotFound, "Server.Execute", "ASP", err.Error(), absPath, 0, 0))
+					var aspErr *asp.ASPError
+					if os.IsNotExist(err) || errors.Is(err, os.ErrNotExist) {
+						aspErr = &asp.ASPError{
+							ASPCode:        173,
+							ASPDescription: "An error occurred when processing the target. The file was not found.",
+							Number:         -2147467259, // 0x80004005
+							Source:         "Active Server Pages",
+							Description:    "An error occurred when processing the target. The file was not found.",
+							File:           absPath,
+							Category:       "Active Server Pages",
+						}
+					} else {
+						var jsSyntaxErr *jscript.JSSyntaxError
+						var vbSyntaxErr *vbscript.VBSyntaxError
+						if errors.As(err, &jsSyntaxErr) || errors.As(err, &vbSyntaxErr) {
+							aspErr = CompilerErrorToASPError(err, absPath)
+						} else {
+							aspErr = RuntimeErrorToASPError(err, absPath)
+						}
+					}
+					server.SetLastError(aspErr)
+					vme := &VMError{
+						Code:           vbscript.VBSyntaxErrorCode(aspErr.ASPCode),
+						Line:           aspErr.Line,
+						Column:         aspErr.Column,
+						File:           aspErr.File,
+						Msg:            aspErr.ASPDescription,
+						ASPCode:        aspErr.ASPCode,
+						ASPDescription: aspErr.ASPDescription,
+						Category:       aspErr.Category,
+						Description:    aspErr.Description,
+						Number:         aspErr.Number,
+						Source:         aspErr.Source,
+					}
+					vm.raiseVMError(vme)
 				}
 			}
 			return Value{Type: VTEmpty}
@@ -9728,15 +9764,19 @@ func (vm *VM) raise(code vbscript.VBSyntaxErrorCode, msg string) {
 		vme.Number = asp.InvalidProgIDHRESULT
 	}
 
+	vm.raiseVMError(vme)
+}
+
+func (vm *VM) raiseVMError(vme *VMError) {
 	vm.errSetFromVMError(vme)
 
 	isJS := len(vm.jsCallStack) > 0 || vm.jsActiveEnvID != 0 || vm.jsRootEnvID != 0 || len(vm.jsTryStack) > 0 || len(vm.jsErrStack) > 0 || vm.engineMode == EngineModeJavaScript
 	if isJS {
 		vm.lastError = vme
-		errObj := vm.jsCreateErrorObject("Error", description)
+		errObj := vm.jsCreateErrorObject("Error", vme.Msg)
 		vm.jsMemberSet(errObj, "number", NewInteger(int64(vme.Number)))
-		vm.jsMemberSet(errObj, "description", NewString(description))
-		vm.jsMemberSet(errObj, "message", NewString(description))
+		vm.jsMemberSet(errObj, "description", NewString(vme.Msg))
+		vm.jsMemberSet(errObj, "message", NewString(vme.Msg))
 
 		if len(vm.jsTryStack) > 0 {
 			target := vm.jsTryStack[len(vm.jsTryStack)-1]

@@ -370,3 +370,86 @@ conn.Close
 		t.Errorf("concurrent execution crash or unexpected error: %v", err)
 	}
 }
+
+// TestSTAPanicRecovery verifies that a panic inside runOnSTA is caught,
+// propagated back to the caller, and re-raised on the calling goroutine
+// without crashing the STA worker or the process.
+func TestSTAPanicRecovery(t *testing.T) {
+	vm := NewVM(nil, nil, 5)
+	defer vm.Release()
+
+	// Ensure STA worker is running
+	if vm.staTaskChan == nil {
+		t.Fatal("expected staTaskChan to be initialized on Windows")
+	}
+
+	// Test 1: panic inside runOnSTA must be re-raised on the caller
+	panicked := false
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panicked = true
+				// Verify the panic value is the expected *VMError
+				vme, ok := r.(*VMError)
+				if !ok {
+					t.Errorf("expected panic value of type *VMError, got %T: %v", r, r)
+				} else {
+					t.Logf("Captured expected VMError panic: code=%d, msg=%s", vme.Code, vme.Msg)
+				}
+			}
+		}()
+		vm.runOnSTA(func() {
+			vm.raiseVMError(&VMError{
+				Code:        10001,
+				Msg:         "simulated STA panic error",
+				Line:        42,
+				Column:      7,
+				File:        "test_sta_panic.asp",
+				Number:      -1073456768,
+				Source:      "VBScript runtime error",
+				Category:    "VBScript runtime",
+				Description: "simulated STA panic error",
+			})
+		})
+	}()
+	if !panicked {
+		t.Fatal("expected runOnSTA to re-raise panic on caller goroutine")
+	}
+
+	// Test 2: STA worker must still be functional after the recovered panic
+	stillWorks := false
+	vm.runOnSTA(func() {
+		stillWorks = true
+	})
+	if !stillWorks {
+		t.Fatal("STA worker must accept and execute tasks after a recovered panic")
+	}
+
+	// Test 3: panic with a plain string value (not *VMError)
+	panickedStr := false
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panickedStr = true
+				if s, ok := r.(string); !ok || s != "plain panic" {
+					t.Errorf("expected plain string panic, got %T: %v", r, r)
+				}
+			}
+		}()
+		vm.runOnSTA(func() {
+			panic("plain panic")
+		})
+	}()
+	if !panickedStr {
+		t.Fatal("expected runOnSTA to re-raise plain string panic")
+	}
+
+	// Test 4: normal task execution must still work
+	normalResult := 0
+	vm.runOnSTA(func() {
+		normalResult = 42
+	})
+	if normalResult != 42 {
+		t.Fatalf("expected normalResult=42, got %d", normalResult)
+	}
+}

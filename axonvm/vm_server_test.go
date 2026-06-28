@@ -1301,7 +1301,119 @@ Response.Write ":AFTER"
 	}
 }
 
+// TestServerExecuteErrorPropagation verifies that Server.Execute propagates errors from a failed script.
+func TestServerExecuteErrorPropagation(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Child ASP has division by zero error.
+	childContent := `<%
+	dim x
+	x = 1 / 0
+	%>`
+	childPath := filepath.Join(tempDir, "child.asp")
+	if err := os.WriteFile(childPath, []byte(childContent), 0644); err != nil {
+		t.Fatalf("write child file: %v", err)
+	}
+
+	// Parent ASP uses Server.Execute and has On Error Resume Next to capture the error details.
+	source := `<%
+	on error resume next
+	Server.Execute "child.asp"
+	Response.Write "Err.Number:" & Err.Number & ":Description:" & Err.Description
+	%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	host.Server().SetRootDir(tempDir)
+	host.Server().SetRequestPath("/index.asp")
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	expectedSub := "Err.Number:-2146828277:Description:Division by zero"
+	if !strings.Contains(output.String(), expectedSub) {
+		t.Fatalf("unexpected Server.Execute output with division by zero: got %q want to contain %q", output.String(), expectedSub)
+	}
+}
+
+// TestServerExecuteFileNotFound verifies that Server.Execute on a non-existent file sets the correct ASP error and HRESULT.
+func TestServerExecuteFileNotFound(t *testing.T) {
+	tempDir := t.TempDir()
+
+	source := `<%
+	on error resume next
+	Server.Execute "nonexistent.asp"
+	Response.Write "Err.Number:" & Err.Number & ":Description:" & Err.Description
+	%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	host.Server().SetRootDir(tempDir)
+	host.Server().SetRequestPath("/index.asp")
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	// ASP 0173 is path not found / file not found, HRESULT is -2147467259
+	expectedSub := "Err.Number:-2147467259:Description:An error occurred when processing the target. The file was not found."
+	if !strings.Contains(output.String(), expectedSub) {
+		t.Fatalf("unexpected Server.Execute output for nonexistent file: got %q want to contain %q", output.String(), expectedSub)
+	}
+
+	// Also verify that without On Error Resume Next, executing a nonexistent file fails with the error returned from Run()
+	sourceNoResume := `<%
+	Server.Execute "nonexistent.asp"
+	%>`
+	compiler2 := NewASPCompiler(sourceNoResume)
+	if err := compiler2.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm2 := NewVM(compiler2.Bytecode(), compiler2.Constants(), compiler2.GlobalsCount())
+	host2 := NewMockHost()
+	var output2 bytes.Buffer
+	host2.SetOutput(&output2)
+	host2.Server().SetRootDir(tempDir)
+	host2.Server().SetRequestPath("/index.asp")
+	vm2.SetHost(host2)
+
+	err := vm2.Run()
+	if err == nil {
+		t.Fatalf("expected vm.Run to fail, but it succeeded")
+	}
+
+	vmErr, ok := err.(*VMError)
+	if !ok {
+		t.Fatalf("expected VMError, got %T: %v", err, err)
+	}
+
+	if vmErr.ASPCode != 173 || vmErr.Number != -2147467259 {
+		t.Fatalf("unexpected error fields: ASPCode=%d, Number=%d", vmErr.ASPCode, vmErr.Number)
+	}
+}
+
 // TestServerTransferStopsParentAndRunsChild verifies that Server.Transfer runs the child file but
+
 // stops the parent script from producing any further output.
 func TestServerTransferStopsParentAndRunsChild(t *testing.T) {
 	tempDir := t.TempDir()

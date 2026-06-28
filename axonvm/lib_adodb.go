@@ -5098,7 +5098,18 @@ func (vm *VM) startSTAWorker() {
 					return
 				}
 				if task != nil {
-					task()
+					// Wrap task execution in a recover to keep the STA worker
+					// alive if a panic occurs. The calling function (runOnSTA)
+					// already captures panics from its closure for propagation
+					// back to the main goroutine; this recovery is a defensive
+					// measure against any direct task submissions that bypass
+					// runOnSTA.
+					func() {
+						defer func() {
+							recover()
+						}()
+						task()
+					}()
 				}
 			case <-quitSTA:
 				return
@@ -5120,6 +5131,12 @@ func (vm *VM) stopSTAWorker() {
 	vm.staTaskChan = nil
 }
 
+// staTaskResult carries the outcome of a task dispatched to the STA worker.
+// If panicValue is non-nil, the task panicked and the caller must re-raise.
+type staTaskResult struct {
+	panicValue interface{}
+}
+
 func (vm *VM) runOnSTA(f func()) {
 	if vm == nil || vm.staTaskChan == nil || runtime.GOOS != "windows" {
 		f()
@@ -5129,14 +5146,26 @@ func (vm *VM) runOnSTA(f func()) {
 		f()
 		return
 	}
-	done := make(chan struct{})
+
+	done := make(chan staTaskResult, 1)
+
 	vm.staTaskChan <- func() {
+		var res staTaskResult
 		defer func() {
+			if r := recover(); r != nil {
+				res.panicValue = r
+			}
 			vm.inSTATask = false
-			close(done)
+			done <- res
 		}()
 		vm.inSTATask = true
 		f()
 	}
-	<-done
+
+	res := <-done
+	if res.panicValue != nil {
+		// Re-raise on the calling goroutine so the main VM error handler
+		// (or the HTTP handler's defer/recover) can catch it.
+		panic(res.panicValue)
+	}
 }
