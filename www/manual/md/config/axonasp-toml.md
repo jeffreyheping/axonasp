@@ -138,7 +138,7 @@ response_buffer_limit_mb = 4
 **Default:** `"UTC"`  
 **Environment Variable:** `DEFAULT_TIMEZONE`
 
-Default timezone for the server. Affects date/time calculations and conversions in ASP applications.
+Set the default timezone for the server. Make sure to use a valid timezone identifier from the IANA Time Zone Database. You can also use UTC+offsets like "UTC+2" or "UTC-5" to specify a timezone relative to UTC, but it's generally recommended to use named timezones for better clarity and to account for daylight saving time changes. The server will use this timezone setting for date and time functions in your ASP scripts, as well as for logging and other time-related operations. Note that this setting does not affect the system timezone of the server itself, which may be different from the timezone used by the AxonASP server.
 
 **Common Timezones:**
 - `"UTC"`

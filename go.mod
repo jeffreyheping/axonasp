@@ -20,7 +20,7 @@ require (
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/joho/godotenv v1.5.1
 	github.com/kardianos/service v1.2.4
-	github.com/klauspost/compress v1.18.6
+	github.com/klauspost/compress v1.18.7
 	github.com/klauspost/reedsolomon v1.14.1
 	github.com/lib/pq v1.12.3
 	github.com/mark3labs/mcp-go v0.55.1
@@ -65,7 +65,7 @@ require (
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/kamstrup/intmap v0.5.2 // indirect
-	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
+	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/mattn/go-isatty v0.0.22 // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
