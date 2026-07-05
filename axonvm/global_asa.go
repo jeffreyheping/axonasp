@@ -155,7 +155,10 @@ func (g *GlobalASA) executeHandler(host ASPHostEnvironment, handlerIdx int, hand
 	defer vm.Release()
 
 	// Suppress standard response output for Global.asa handlers to match IIS behavior.
-	host.Response().Output = nil
+	response := host.Response()
+	originalOutput := response.Output
+	response.Output = nil
+	defer func() { response.Output = originalOutput }()
 
 	// Run the top-level code to populate Sub/Function declarations into global variables
 	// and the JScript environment.
