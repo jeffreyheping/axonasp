@@ -6195,7 +6195,7 @@ func (vm *VM) dispatchNativeCall(objID int64, member string, args []Value) Value
 		switch {
 		case strings.EqualFold(member, "Write"):
 			if len(args) > 0 {
-				response.Write(vm.valueToString(args[0]))
+				response.Write(vm.valueToResponseString(args[0]))
 			}
 			return Value{Type: VTEmpty}
 		case strings.EqualFold(member, "BinaryWrite"):
@@ -8205,6 +8205,41 @@ func (vm *VM) valueToString(v Value) string {
 		return vm.dateToLocalizedString(v)
 	}
 	return v.String()
+}
+
+// valueToResponseString applies Response.Write coercion rules for mixed VBScript/JScript values.
+func (vm *VM) valueToResponseString(v Value) string {
+	v = resolveCallable(vm, v)
+	isJS := vm.engineMode == EngineModeJavaScript || len(vm.jsCallStack) > 0 || vm.jsActiveEnvID != 0 || vm.jsRootEnvID != 0
+	if !isJS {
+		return vm.valueToString(v)
+	}
+
+	switch v.Type {
+	case VTArray:
+		return vm.jsArrayToString(v)
+	case VTJSFunction:
+		if out, handled := vm.jsCallMember(v, "toString", nil); handled {
+			return vm.valueToString(out)
+		}
+		return vm.jsToString(v)
+	case VTJSProxy, VTJSUndefined:
+		return vm.jsToString(v)
+	case VTJSObject:
+		objType := vm.jsObjectStringProperty(v, "__js_type")
+		if objType == "Boolean" {
+			prim, handled := vm.jsCallMember(v, "valueOf", nil)
+			if handled && prim.Type == VTBool {
+				return prim.String()
+			}
+		}
+		if out, handled := vm.jsCallMember(v, "toString", nil); handled {
+			return vm.valueToString(out)
+		}
+		return vm.jsToString(v)
+	default:
+		return vm.valueToString(v)
+	}
 }
 
 // newRequestCollectionValueItem creates one native object wrapper for one Request collection entry value.

@@ -339,6 +339,15 @@ func parseLocalizedTimeValue(text string, location *time.Location, profile built
 	}
 	text = rewriteJScriptTimezones(text)
 	layouts := []string{
+		"Mon Jan _2 15:04:05 -0700 2006",
+		"Mon Jan _2 15:04:05 MST 2006",
+		"Mon Jan _2 15:04:05 2006",
+		"Mon Jan _2 2006 15:04:05 -0700",
+		"Mon Jan _2 2006 15:04:05 MST",
+		"Mon Jan _2 2006 15:04:05",
+		"Mon, _2 Jan 2006 15:04:05 -0700",
+		"Mon, _2 Jan 2006 15:04:05 MST",
+		"Mon, _2 Jan 2006 15:04:05",
 		"Mon Jan 02 15:04:05 -0700 2006",
 		"Mon Jan 02 15:04:05 MST 2006",
 		"Mon Jan 02 15:04:05 2006",

@@ -5,6 +5,7 @@ on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -114,6 +115,23 @@ jobs:
           cp *.exe axonasp-windows/
           cp -r www config mcp LICENSE.txt LEGAL-DISCLAIMER.md global.asa iis-http.cmd install-service.ps1 uninstall-service.ps1 axonasp-windows/
           zip -r "axonasp-windows-${VERSION}-amd64.zip" axonasp-windows/
+
+      - name: Build and Create macOS ARM64 Zip
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          echo "Building for macOS ARM64..."
+          mkdir -p axonasp-macos-arm64
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.Version=${VERSION}" -o axonasp-macos-arm64/axonasp-http ./server
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.Version=${VERSION}" -o axonasp-macos-arm64/axonasp-fastcgi ./fastcgi
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.Version=${VERSION}" -o axonasp-macos-arm64/axonasp-cli ./cli
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.Version=${VERSION}" -o axonasp-macos-arm64/axonasp-mcp ./mcp
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.Version=${VERSION}" -o axonasp-macos-arm64/axonasp-admin ./admin
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.Version=${VERSION}" -o axonasp-macos-arm64/axonasp-service ./service
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.Version=${VERSION}" -o axonasp-macos-arm64/axonasp-testsuite ./testsuite
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.Version=${VERSION}" -o axonasp-macos-arm64/axonasp-fpm ./fpm
+          cp -r www config mcp LICENSE.txt LEGAL-DISCLAIMER.md global.asa axonasp-macos-arm64/
+          zip -r "axonasp-macos-${VERSION}-arm64.zip" axonasp-macos-arm64/
 
       - name: Upload Packages as Artifacts
         uses: actions/upload-artifact@v4

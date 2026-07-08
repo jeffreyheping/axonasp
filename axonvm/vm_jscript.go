@@ -64,6 +64,7 @@ const jsStrictModeFlag = "__axon_internal__:strict_mode"
 const jsGeneratorFlag = "__axon_internal__:generator"
 const jsAsyncFlag = "__axon_internal__:async"
 const jsDerivedConstructorFlag = "__axon_internal__:derived_constructor"
+const jsFunctionSourceMetaPrefix = "__js_source__:"
 const jsModuleExportPrefix = "__js_export__:"
 const jsHexUpperDigits = "0123456789ABCDEF"
 
@@ -119,6 +120,7 @@ type jsDefinePropertySpec struct {
 
 type jsFunctionObject struct {
 	name       string
+	source     string
 	params     []string
 	restParam  string
 	localCount int
@@ -3155,7 +3157,7 @@ func (vm *VM) jsArrayToString(v Value) string {
 	totalSize := 0
 	for i := 0; i < len(v.Arr.Values); i++ {
 		item := v.Arr.Values[i]
-		if item.Type == VTJSUndefined || item.Type == VTNull {
+		if item.Type == VTJSUndefined || item.Type == VTNull || item.Type == VTEmpty {
 			parts[i] = ""
 		} else {
 			parts[i] = vm.jsConcatString(item)
@@ -3205,6 +3207,7 @@ func (vm *VM) jsCreateClosure(template Value) Value {
 	proto := vm.jsCreatePrototypeObject(fnVal)
 	params := make([]string, 0, len(template.Names))
 	restParam := ""
+	source := ""
 	localCount := 0
 	isClassConstructor := false
 	isStrict := false
@@ -3221,6 +3224,12 @@ func (vm *VM) jsCreateClosure(template Value) Value {
 		}
 		if after, ok := strings.CutPrefix(name, jsRestParamPrefix); ok {
 			restParam = after
+			continue
+		}
+		if after, ok := strings.CutPrefix(name, jsFunctionSourceMetaPrefix); ok {
+			if decoded, err := base64.StdEncoding.DecodeString(after); err == nil {
+				source = string(decoded)
+			}
 			continue
 		}
 		if name == jsClassConstructorFlag {
@@ -3247,6 +3256,7 @@ func (vm *VM) jsCreateClosure(template Value) Value {
 	}
 	fnObj := &jsFunctionObject{
 		name:               template.Str,
+		source:             source,
 		params:             params,
 		restParam:          restParam,
 		localCount:         localCount,
@@ -4163,6 +4173,76 @@ func (vm *VM) jsFunctionExpectedLength(fn Value) int {
 		return remaining
 	}
 	return len(closure.params)
+}
+
+// jsFunctionToString returns a JScript-compatible function source string.
+func (vm *VM) jsFunctionToString(fn Value) string {
+	if fn.Type != VTJSFunction {
+		return "function() {\n[native code]\n}"
+	}
+	closure, ok := vm.jsFunctionItems[fn.Num]
+	if !ok || closure == nil {
+		return "function() {\n[native code]\n}"
+	}
+	if closure.source != "" {
+		src := strings.TrimSpace(closure.source)
+		if strings.HasPrefix(src, "function") && !strings.HasPrefix(src, "function anonymous(") {
+			return "(" + src + ")"
+		}
+		return src
+	}
+	name := strings.TrimSpace(closure.name)
+	if name == "" {
+		name = "anonymous"
+	}
+	var b strings.Builder
+	b.WriteString("function ")
+	b.WriteString(name)
+	b.WriteByte('(')
+	for i := range closure.params {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(closure.params[i])
+	}
+	if closure.restParam != "" {
+		if len(closure.params) > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString("...")
+		b.WriteString(closure.restParam)
+	}
+	b.WriteString(") {\n[native code]\n}")
+	return b.String()
+}
+
+func (vm *VM) jsRegExpToString(target Value) string {
+	if target.Type != VTJSObject {
+		return "/(?:)/"
+	}
+	pattern := vm.jsObjectStringProperty(target, "pattern")
+	flags := vm.jsRegExpGetFlags(target)
+	return "/" + pattern + "/" + flags
+}
+
+func (vm *VM) jsConstructObject(args []Value) Value {
+	if len(args) == 0 || args[0].Type == VTJSUndefined || args[0].Type == VTNull {
+		objID := vm.allocJSID()
+		obj := make(map[string]Value, 8)
+		if proto := vm.jsGetIntrinsicPrototype("Object"); proto.Type == VTJSObject {
+			obj["__js_proto"] = proto
+		}
+		vm.jsObjectItems[objID] = obj
+		vm.jsPropertyItems[objID] = make(map[string]jsPropertyDescriptor, 8)
+		return Value{Type: VTJSObject, Num: objID}
+	}
+	v := args[0]
+	switch v.Type {
+	case VTJSObject, VTJSFunction, VTJSProxy, VTArray:
+		return v
+	default:
+		return vm.jsToObject(v)
+	}
 }
 
 // jsObjectToStringTag returns the canonical Object.prototype.toString tag.
@@ -5334,6 +5414,10 @@ func (vm *VM) jsCallMember(target Value, member string, args []Value) (Value, bo
 
 	if target.Type == VTJSFunction {
 		switch {
+		case strings.EqualFold(member, "toString"), strings.EqualFold(member, "toLocaleString"):
+			return NewString(vm.jsFunctionToString(target)), true
+		case strings.EqualFold(member, "valueOf"):
+			return target, true
 		case strings.EqualFold(member, "call"):
 			callThis := Value{Type: VTJSUndefined}
 			callArgs := args
@@ -6757,7 +6841,14 @@ func (vm *VM) jsCallMember(target Value, member string, args []Value) (Value, bo
 			case strings.EqualFold(member, "isPrototypeOf"):
 				return NewBool(vm.jsObjectIsPrototypeOf(target, jsArgOrUndefined(args, 0))), true
 			case strings.EqualFold(member, "toString"):
-				return NewString(vm.jsObjectToStringTag(target)), true
+				switch objType {
+				case "RegExp":
+					return NewString(vm.jsRegExpToString(target)), true
+				case "Enumerator":
+					return NewString("[object Object]"), true
+				default:
+					return NewString(vm.jsObjectToStringTag(target)), true
+				}
 			case strings.EqualFold(member, "toLocaleString"):
 				return NewString(vm.jsObjectToStringTag(target)), true
 			case strings.EqualFold(member, "valueOf"):
@@ -9700,6 +9791,8 @@ func (vm *VM) jsCall(callee Value, thisVal Value, args []Value) Value {
 		switch ctorName {
 		case "Function":
 			return vm.jsConstructFunction(args)
+		case "Object":
+			return vm.jsConstructObject(args)
 		case "Number":
 			if len(args) == 0 {
 				return NewDouble(0)
@@ -10658,6 +10751,11 @@ func (vm *VM) jsConstructFunction(args []Value) Value {
 		resultValue = child.stack[child.sp]
 	}
 	vm.syncExecuteGlobalState(child)
+	if resultValue.Type == VTJSFunction {
+		if closure, ok := vm.jsFunctionItems[resultValue.Num]; ok && closure != nil {
+			closure.source = "function anonymous(" + strings.Join(params, ", ") + ") {\n" + body + "\n}"
+		}
+	}
 	return resultValue
 }
 
@@ -10706,6 +10804,8 @@ func (vm *VM) jsConstruct(constructor Value, args []Value, newTarget Value, isSu
 		switch ctorName {
 		case "Function":
 			return vm.jsConstructFunction(args)
+		case "Object":
+			return vm.jsConstructObject(args)
 		case "Array":
 			if len(args) == 0 {
 				return ValueFromVBArray(NewVBArrayFromValues(0, nil))
@@ -10779,7 +10879,7 @@ func (vm *VM) jsConstruct(constructor Value, args []Value, newTarget Value, isSu
 		case "String":
 			str := ""
 			if len(args) > 0 && args[0].Type != VTJSUndefined {
-				str = vm.valueToString(args[0])
+				str = vm.jsToString(args[0])
 			}
 			objID := vm.allocJSID()
 			obj := make(map[string]Value, 4)
