@@ -50,6 +50,32 @@ Sub LogMessage(msg)
 End Sub
 ```
 
+### With Object References (Singleton Pattern)
+
+`Static` variables can also hold object references assigned using the `Set` statement. Upon the first procedure call, the variable starts in an uninitialized state that evaluates as `True` when checked against `Is Nothing`. This behavior enables localized, lazy-initialized Singleton patterns:
+
+```vbscript
+Class Singleton
+    Public Name
+    Private Sub Class_Initialize
+        Name = "Shared Resource"
+    End Sub
+End Class
+
+Function GetInstance()
+    Static instance
+    If instance Is Nothing Then
+        Set instance = New Singleton
+    End If
+    Set GetInstance = instance
+End Function
+
+Dim s1, s2
+Set s1 = GetInstance()
+Set s2 = GetInstance()
+' Both s1 and s2 point to the same Singleton instance
+```
+
 ## Remarks
 - `Static` variables are only valid within `Sub`, `Function`, or `Property` blocks.
 - In a `Class` method, `Static` variables are shared across all instances of that class within the same request.
