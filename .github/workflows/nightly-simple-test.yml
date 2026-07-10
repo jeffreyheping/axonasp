@@ -1,0 +1,75 @@
+# Simplified nightly test: remove schedule trigger and complex features
+# to isolate the root cause of startup_failure.
+name: Nightly Simple Test
+
+on:
+  workflow_dispatch:
+
+env:
+  UPSTREAM_REPO: guimaraeslucas/axonasp
+  NIGHTLY_BRANCH: nightly
+
+jobs:
+  # Just the sync job, nothing else
+  sync:
+    name: Sync upstream & apply patches
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      upstream-sha: ${{ steps.upstream-sha.outputs.value }}
+      changed: ${{ steps.commit.outputs.changed }}
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream main
+        run: |
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream main
+          echo "::notice::upstream HEAD: $(git rev-parse upstream/main)"
+
+      - name: Record upstream SHA
+        id: upstream-sha
+        run: |
+          echo "value=$(git rev-parse upstream/main)" >> "$GITHUB_OUTPUT"
+
+      - name: Overlay upstream code
+        run: git checkout upstream/main -- .
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Replay fork patches
+        run: bash nightly/apply.sh
+
+      - name: Commit patched tree
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            SHORT=$(git rev-parse --short upstream/main)
+            git commit -m "nightly: sync upstream ${SHORT}"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push to nightly branch
+        if: steps.commit.outputs.changed == 'true'
+        run: git push origin HEAD:refs/heads/${NIGHTLY_BRANCH} --force
+
+  # Test reusable workflow call (just build, no release)
+  build:
+    name: Build OS packages
+    needs: sync
+    uses: ./.github/workflows/build-packages.yml
+    with:
+      ref: nightly
