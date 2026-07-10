@@ -126,6 +126,16 @@ jobs:
           done
           ls -la *.deb *.rpm *.apk *.pkg.tar.zst
 
+      - name: Create Linux portable tarball (.tar.xz)
+        if: matrix.goos == 'linux'
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          ARCH: ${{ matrix.goarch }}
+        run: |
+          STAGE="/tmp/axonasp-stage"
+          tar -cJf "axonasp-linux-${VERSION}-${ARCH}.tar.xz" "${STAGE}/"
+          ls -la axonasp-linux-*.tar.xz
+
       # ──────────────────────────────────────────────────────────────
       # Windows: portable zip
       # ──────────────────────────────────────────────────────────────
