@@ -443,8 +443,8 @@ jobs:
           mv "$STAGE/$SUBDIR"/* "$STAGE/opt/axonasp/" 2>/dev/null || true
           rm -rf "$STAGE/$SUBDIR"
 
-          # Build the pkg creator tool (has its own go.mod)
-          (cd tools/freebsd-pkg && go build -o /tmp/freebsd-pkg .)
+          # Build the pkg creator tool (now part of main module)
+          go build -o /tmp/freebsd-pkg ./tools/freebsd-pkg
 
           # Architecture tag for FreeBSD pkg
           if [ "${ARCH}" = "amd64" ]; then
