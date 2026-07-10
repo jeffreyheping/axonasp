@@ -1,0 +1,19 @@
+# Test 2: Check if actions/checkout + permissions:write causes startup_failure
+name: Nightly Test Step 2
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-checkout:
+    name: Test checkout + permissions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Echo something
+        run: echo "Checkout succeeded"
