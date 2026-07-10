@@ -280,10 +280,16 @@ jobs:
           name: axonasp-windows-${{ matrix.arch }}
           path: .
 
-      - name: Extract Windows zip
+      - name: Extract Windows zip and flatten
         run: |
           $zip = Get-ChildItem axonasp-windows-*.zip | Select-Object -First 1
           Expand-Archive -Path $zip.Name -DestinationPath . -Force
+          # Move contents from subdirectory (axonasp-windows-<arch>/) to root
+          $subdir = Get-ChildItem -Directory | Where-Object { $_.Name -like "axonasp-windows-*" } | Select-Object -First 1
+          if ($subdir) {
+            Get-ChildItem $subdir.FullName | Move-Item -Destination . -Force
+            Remove-Item $subdir.FullName
+          }
           Get-ChildItem *.exe
         shell: pwsh
 
@@ -428,14 +434,14 @@ jobs:
           mkdir -p "$STAGE"
           tar -xJf "$tarball" -C "$STAGE"
 
-          # Flatten: tarball contains axonasp-freebsd-<arch>/*
+          # Flatten: tarball contains axonasp-freebsd-<arch>/* → move to $STAGE/opt/axonasp/
           SUBDIR=$(ls "$STAGE" | head -n1)
-          mv "$STAGE/$SUBDIR" "$STAGE/opt"
           mkdir -p "$STAGE/opt/axonasp"
-          mv "$STAGE/opt/"* "$STAGE/opt/axonasp/" 2>/dev/null || true
+          mv "$STAGE/$SUBDIR"/* "$STAGE/opt/axonasp/" 2>/dev/null || true
+          rm -rf "$STAGE/$SUBDIR"
 
-          # Build the pkg creator tool
-          go build -o /tmp/freebsd-pkg ./tools/freebsd-pkg
+          # Build the pkg creator tool (has its own go.mod)
+          (cd tools/freebsd-pkg && go build -o /tmp/freebsd-pkg .)
 
           # Architecture tag for FreeBSD pkg
           if [ "${ARCH}" = "amd64" ]; then
