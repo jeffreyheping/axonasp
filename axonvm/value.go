@@ -360,5 +360,5 @@ func (v Value) ArgRefIdx() int { return int(v.Num) }
 
 // IsObjectReferenceValue reports whether a value is a valid object reference for Is/Is Not.
 func IsObjectReferenceValue(v Value) bool {
-	return v.Type == VTObject || v.Type == VTNativeObject || v.Type == VTNothing
+	return v.Type == VTObject || v.Type == VTNativeObject || v.Type == VTNothing || (v.Type == VTEmpty && v.Interface == "static")
 }

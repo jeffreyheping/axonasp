@@ -902,6 +902,13 @@ func NewVMFromCompiler(compiler *Compiler) *VM {
 	vm.sourceMap = compiler.sourceMap.Clone()
 	vm.globalNames = append(vm.globalNames[:0], compiler.Globals.names...)
 	vm.rebuildGlobalNameIndex()
+	for i, name := range vm.globalNames {
+		if strings.HasPrefix(name, "__static_") {
+			if i < len(vm.Globals) && vm.Globals[i].Type == VTEmpty {
+				vm.Globals[i].Interface = "static"
+			}
+		}
+	}
 	clear(vm.globalZeroArgFuncs)
 	maps.Copy(vm.globalZeroArgFuncs, compiler.globalZeroArgFuncs)
 	clear(vm.globalZeroArgSubs)
@@ -2012,6 +2019,9 @@ aspExecLoop:
 			idx := binary.BigEndian.Uint16(vm.bytecode[vm.ip:])
 			vm.ip += 2
 			val := vm.Globals[idx]
+			if val.Type == VTEmpty && int(idx) < len(vm.globalNames) && strings.HasPrefix(vm.globalNames[idx], "__static_") {
+				val.Interface = "static"
+			}
 			if val.Type == VTObject {
 				if className, ok := vm.globalClassTypes[idx]; ok {
 					val.Interface = className
@@ -2797,8 +2807,8 @@ aspExecLoop:
 				vm.sp--
 				continue
 			}
-			isNothingA := a.Type == VTNothing || ((a.Type == VTObject || a.Type == VTNativeObject) && a.Num == 0)
-			isNothingB := b.Type == VTNothing || ((b.Type == VTObject || b.Type == VTNativeObject) && b.Num == 0)
+			isNothingA := a.Type == VTNothing || (a.Type == VTEmpty && a.Interface == "static") || ((a.Type == VTObject || a.Type == VTNativeObject) && a.Num == 0)
+			isNothingB := b.Type == VTNothing || (b.Type == VTEmpty && b.Interface == "static") || ((b.Type == VTObject || b.Type == VTNativeObject) && b.Num == 0)
 			if isNothingA && isNothingB {
 				vm.stack[vm.sp-1] = NewBool(true)
 			} else if isNothingA || isNothingB {
@@ -2817,8 +2827,8 @@ aspExecLoop:
 				vm.sp--
 				continue
 			}
-			isNothingA := a.Type == VTNothing || ((a.Type == VTObject || a.Type == VTNativeObject) && a.Num == 0)
-			isNothingB := b.Type == VTNothing || ((b.Type == VTObject || b.Type == VTNativeObject) && b.Num == 0)
+			isNothingA := a.Type == VTNothing || (a.Type == VTEmpty && a.Interface == "static") || ((a.Type == VTObject || a.Type == VTNativeObject) && a.Num == 0)
+			isNothingB := b.Type == VTNothing || (b.Type == VTEmpty && b.Interface == "static") || ((b.Type == VTObject || b.Type == VTNativeObject) && b.Num == 0)
 			if isNothingA && isNothingB {
 				vm.stack[vm.sp-1] = NewBool(false)
 			} else if isNothingA || isNothingB {
@@ -2961,7 +2971,17 @@ aspExecLoop:
 				vm.ip = target
 				continue
 			}
-			if a.Type != b.Type || a.Num != b.Num {
+			isNothingA := a.Type == VTNothing || (a.Type == VTEmpty && a.Interface == "static") || ((a.Type == VTObject || a.Type == VTNativeObject) && a.Num == 0)
+			isNothingB := b.Type == VTNothing || (b.Type == VTEmpty && b.Interface == "static") || ((b.Type == VTObject || b.Type == VTNativeObject) && b.Num == 0)
+			var eq bool
+			if isNothingA && isNothingB {
+				eq = true
+			} else if isNothingA || isNothingB {
+				eq = false
+			} else {
+				eq = (a.Type == b.Type && a.Num == b.Num)
+			}
+			if !eq {
 				vm.ip = target
 			}
 
@@ -6195,7 +6215,7 @@ func (vm *VM) dispatchNativeCall(objID int64, member string, args []Value) Value
 		switch {
 		case strings.EqualFold(member, "Write"):
 			if len(args) > 0 {
-				response.Write(vm.valueToString(args[0]))
+				response.Write(vm.valueToResponseString(args[0]))
 			}
 			return Value{Type: VTEmpty}
 		case strings.EqualFold(member, "BinaryWrite"):
@@ -8207,6 +8227,41 @@ func (vm *VM) valueToString(v Value) string {
 	return v.String()
 }
 
+// valueToResponseString applies Response.Write coercion rules for mixed VBScript/JScript values.
+func (vm *VM) valueToResponseString(v Value) string {
+	v = resolveCallable(vm, v)
+	isJS := vm.engineMode == EngineModeJavaScript || len(vm.jsCallStack) > 0 || vm.jsActiveEnvID != 0 || vm.jsRootEnvID != 0
+	if !isJS {
+		return vm.valueToString(v)
+	}
+
+	switch v.Type {
+	case VTArray:
+		return vm.jsArrayToString(v)
+	case VTJSFunction:
+		if out, handled := vm.jsCallMember(v, "toString", nil); handled {
+			return vm.valueToString(out)
+		}
+		return vm.jsToString(v)
+	case VTJSProxy, VTJSUndefined:
+		return vm.jsToString(v)
+	case VTJSObject:
+		objType := vm.jsObjectStringProperty(v, "__js_type")
+		if objType == "Boolean" {
+			prim, handled := vm.jsCallMember(v, "valueOf", nil)
+			if handled && prim.Type == VTBool {
+				return prim.String()
+			}
+		}
+		if out, handled := vm.jsCallMember(v, "toString", nil); handled {
+			return vm.valueToString(out)
+		}
+		return vm.jsToString(v)
+	default:
+		return vm.valueToString(v)
+	}
+}
+
 // newRequestCollectionValueItem creates one native object wrapper for one Request collection entry value.
 func (vm *VM) newRequestCollectionValueItem(value asp.RequestCollectionValue) Value {
 	id := vm.nextDynamicNativeID
@@ -9205,6 +9260,9 @@ func (vm *VM) unwrapArgRefValue(arg Value) Value {
 	} else if isGlobal {
 		if idx >= 0 && idx < len(vm.Globals) {
 			rawVal = vm.Globals[idx]
+			if rawVal.Type == VTEmpty && idx < len(vm.globalNames) && strings.HasPrefix(vm.globalNames[idx], "__static_") {
+				rawVal.Interface = "static"
+			}
 		}
 	} else if isLocal {
 		slot := vm.fp + idx

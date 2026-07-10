@@ -21,6 +21,7 @@
 package axonvm
 
 import (
+	"encoding/base64"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -3029,6 +3030,9 @@ func (c *Compiler) compileJScriptFunctionLiteral(fn *jsast.FunctionLiteral, fall
 	}
 	if localCount > 0 {
 		params = append(params, "__js_local_count__:"+strconv.Itoa(localCount))
+	}
+	if fn.Source != "" {
+		params = append(params, jsFunctionSourceMetaPrefix+base64.StdEncoding.EncodeToString([]byte(fn.Source)))
 	}
 
 	templateIdx := c.addConstant(Value{

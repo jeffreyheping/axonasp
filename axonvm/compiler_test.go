@@ -164,3 +164,37 @@ func TestCompileZeroArgSubForwardRef(t *testing.T) {
 		t.Fatalf("unexpected output: %q", out)
 	}
 }
+
+// TestVBScriptStaticObjectReference verifies that local Static variables can hold
+// object references, persist across executions, and evaluate correctly with "Is Nothing".
+func TestVBScriptStaticObjectReference(t *testing.T) {
+	source := `<%
+	Class Counter
+		Public Val
+		Private Sub Class_Initialize
+			Val = 0
+		End Sub
+	End Class
+
+	Function GetCounter()
+		Static c
+		If c Is Nothing Then
+			Set c = New Counter
+		End If
+		c.Val = c.Val + 1
+		Set GetCounter = c
+	End Function
+
+	Dim c1, c2
+	Set c1 = GetCounter()
+	Set c2 = GetCounter()
+
+	Response.Write "c1=" & c1.Val & "|c2=" & c2.Val & "|" & (c1 Is c2)
+	%>`
+
+	out := runVBSAndGetOutput(t, source)
+	expected := "c1=2|c2=2|True"
+	if out != expected {
+		t.Fatalf("unexpected static object reference output: got %q, want %q", out, expected)
+	}
+}
