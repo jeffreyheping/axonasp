@@ -132,7 +132,11 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
           ARCH: ${{ matrix.goarch }}
         run: |
-          STAGE="/tmp/axonasp-stage"
+          STAGE="axonasp-linux-${ARCH}"
+          mkdir -p "${STAGE}"
+          cp axonasp-http axonasp-fastcgi axonasp-cli axonasp-mcp \
+             axonasp-admin axonasp-service axonasp-testsuite axonasp-fpm "${STAGE}/"
+          cp -r www config mcp LICENSE.txt LEGAL-DISCLAIMER.md global.asa "${STAGE}/"
           tar -cJf "axonasp-linux-${VERSION}-${ARCH}.tar.xz" "${STAGE}/"
           ls -la axonasp-linux-*.tar.xz
 
