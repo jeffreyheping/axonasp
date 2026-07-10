@@ -52,6 +52,7 @@ go.work.sum
 
 #innosetup
 *.iss
+!installer.iss
 
 # Editor/IDE
 .vscode/
