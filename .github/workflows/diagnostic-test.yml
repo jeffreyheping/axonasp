@@ -1,0 +1,14 @@
+# Minimal diagnostic workflow to isolate the nightly-build startup_failure.
+# If THIS runs but nightly-build.yml doesn't, the issue is in nightly-build's
+# specific config. If this also fails, there's a repo-level problem.
+name: Diagnostic Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  echo-test:
+    name: Echo Hello
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Diagnostic workflow ran successfully"
