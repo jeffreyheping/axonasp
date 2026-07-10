@@ -6,6 +6,15 @@ on:
     tags:
       - "v*.*.*"
   workflow_dispatch:
+  workflow_call:
+    # Allows nightly-build.yml to call this workflow on a different ref.
+    # When empty, the caller's event ref is used (default checkout behavior).
+    inputs:
+      ref:
+        description: 'Git ref (branch/tag) to build from; empty = use the event ref'
+        required: false
+        default: ''
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -22,6 +31,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref || github.ref }}
           fetch-depth: 0
 
       - name: Compute version string
