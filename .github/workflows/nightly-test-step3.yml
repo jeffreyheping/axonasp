@@ -1,0 +1,17 @@
+# Test 3: Checkout WITHOUT permissions:write
+name: Nightly Test Step 3
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-checkout-no-perms:
+    name: Test checkout without write permissions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Echo something
+        run: echo "Checkout succeeded"
