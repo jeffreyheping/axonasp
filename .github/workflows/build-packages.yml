@@ -271,11 +271,90 @@ jobs:
           if-no-files-found: error
 
   # ──────────────────────────────────────────────────────────────
+  # macOS .pkg installer — runs on a macOS runner
+  # ──────────────────────────────────────────────────────────────
+  build-macos-installer:
+    name: Build macOS pkg ${{ matrix.arch }}
+    needs: [prepare, build]
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download macOS binaries from build job
+        uses: actions/download-artifact@v4
+        with:
+          name: axonasp-darwin-${{ matrix.arch }}
+          path: .
+
+      - name: Extract macOS zip
+        run: |
+          zip=$(ls axonasp-macos-*.zip | head -n1)
+          unzip -q "$zip"
+          ls -la axonasp-macos-*/
+
+      - name: Build .pkg installer
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -e
+          STAGE="axonasp-macos-${ARCH}"
+          PKGROOT="pkgroot"
+
+          # Build payload tree under /opt/axonasp
+          mkdir -p "${PKGROOT}/opt/axonasp"
+          cp -R "${STAGE}/"* "${PKGROOT}/opt/axonasp/"
+
+          # Create postinstall script: symlink binaries to /usr/local/bin
+          mkdir -p scripts
+          cat > scripts/postinstall <<'SCRIPT'
+          #!/bin/bash
+          set -e
+          for bin in axonasp-http axonasp-fastcgi axonasp-cli axonasp-mcp axonasp-admin axonasp-service axonasp-testsuite axonasp-fpm; do
+              if [ -f "/opt/axonasp/$bin" ]; then
+                  ln -sf "/opt/axonasp/$bin" "/usr/local/bin/$bin"
+              fi
+          done
+          mkdir -p /etc/axonasp
+          if [ -f /opt/axonasp/config/axonasp.toml ]; then
+              ln -sf /opt/axonasp/config/axonasp.toml /etc/axonasp/axonasp.toml
+          fi
+          SCRIPT
+          chmod +x scripts/postinstall
+
+          # Package
+          pkgbuild \
+            --root "${PKGROOT}" \
+            --identifier com.g3pix.axonasp \
+            --version "${VERSION}" \
+            --scripts scripts \
+            --install-location / \
+            "axonasp-macos-${VERSION}-${ARCH}.pkg"
+
+          ls -la *.pkg
+
+      - name: Upload pkg artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: axonasp-macos-pkg-${{ matrix.arch }}
+          path: "*.pkg"
+          if-no-files-found: error
+
+  # ──────────────────────────────────────────────────────────────
   # Publish everything to a GitHub Release (tag pushes only)
   # ──────────────────────────────────────────────────────────────
   release:
     name: Publish GitHub Release
-    needs: [build, build-wasm, build-windows-installer]
+    needs: [build, build-wasm, build-windows-installer, build-macos-installer]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -298,4 +377,5 @@ jobs:
             artifacts/**/*.apk
             artifacts/**/*.pkg.tar.zst
             artifacts/**/*.zip
+            artifacts/**/*.pkg
             artifacts/**/*installer*.exe
