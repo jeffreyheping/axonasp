@@ -168,6 +168,21 @@ jobs:
             *.apk
             *.pkg.tar.zst
             *.zip
+            axonasp-http
+            axonasp-fastcgi
+            axonasp-cli
+            axonasp-mcp
+            axonasp-admin
+            axonasp-service
+            axonasp-testsuite
+            axonasp-fpm
+            axonasp-http.exe
+            axonasp-fastcgi.exe
+            axonasp-cli.exe
+            axonasp-mcp.exe
+            axonasp-admin.exe
+            axonasp-service.exe
+            axonasp-testsuite.exe
           if-no-files-found: error
 
   # ──────────────────────────────────────────────────────────────
@@ -249,3 +264,12 @@ jobs:
             artifacts/**/*.apk
             artifacts/**/*.pkg.tar.zst
             artifacts/**/*.zip
+            artifacts/**/*.exe
+            artifacts/**/axonasp-http
+            artifacts/**/axonasp-fastcgi
+            artifacts/**/axonasp-cli
+            artifacts/**/axonasp-mcp
+            artifacts/**/axonasp-admin
+            artifacts/**/axonasp-service
+            artifacts/**/axonasp-testsuite
+            artifacts/**/axonasp-fpm
