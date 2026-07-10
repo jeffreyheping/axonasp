@@ -3,12 +3,13 @@
 # Every day at 09:00 Beijing time (UTC 01:00) it:
 #   1. Fetches latest upstream (guimaraeslucas/axonasp) main,
 #   2. Replays fork-specific patches,
-#   3. Pushes patched tree to the `nightly` branch,
-#   4. Builds all OS packages + a :nightly Docker image,
-#   5. Publishes/updates a rolling pre-release tagged `nightly`.
+#   3. Builds all OS packages + a :nightly Docker image,
+#   4. Publishes/updates a rolling pre-release tagged `nightly`.
 #
 # NOTE: This workflow cannot use reusable workflow calls because GitHub
 # restricts them in fork repositories. All build logic is inline.
+# NOTE: We do NOT push to a nightly branch because GITHUB_TOKEN lacks
+# `workflows` permission. Builds happen directly in the sync job's workspace.
 name: Nightly Build
 
 on:
@@ -22,14 +23,11 @@ concurrency:
 
 env:
   UPSTREAM_REPO: guimaraeslucas/axonasp
-  NIGHTLY_BRANCH: nightly
 
 jobs:
   sync:
     name: Sync upstream & apply patches
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     outputs:
       upstream-sha: ${{ steps.upstream-sha.outputs.value }}
       upstream-date: ${{ steps.upstream-sha.outputs.date }}
@@ -57,35 +55,37 @@ jobs:
           cache: true
       - name: Replay fork patches
         run: bash nightly/apply.sh
-      - name: Commit patched tree
+      - name: Check if anything changed
         id: commit
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           if git diff --cached --quiet; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No changes vs previous state"
           else
-            SHORT=$(git rev-parse --short upstream/main)
-            git commit -m "nightly: sync upstream ${SHORT} + apply fork patches"
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
-      - name: Push to nightly branch
+      - name: Upload patched workspace as artifact
         if: steps.commit.outputs.changed == 'true'
-        run: git push origin HEAD:refs/heads/${NIGHTLY_BRANCH} --force
+        uses: actions/upload-artifact@v4
+        with:
+          name: patched-workspace
+          path: .
+          retention-days: 1
 
   build:
     name: Build OS packages
     needs: sync
+    if: needs.sync.outputs.changed == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Checkout nightly branch
-        uses: actions/checkout@v4
+      - name: Download patched workspace
+        uses: actions/download-artifact@v4
         with:
-          ref: ${{ env.NIGHTLY_BRANCH }}
-          fetch-depth: 0
+          name: patched-workspace
+          path: .
       - name: Compute version string
         id: version
         run: |
@@ -186,16 +186,17 @@ jobs:
   docker:
     name: Build Docker :nightly
     needs: sync
+    if: needs.sync.outputs.changed == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
-      - name: Checkout nightly branch
-        uses: actions/checkout@v4
+      - name: Download patched workspace
+        uses: actions/download-artifact@v4
         with:
-          ref: ${{ env.NIGHTLY_BRANCH }}
-          fetch-depth: 0
+          name: patched-workspace
+          path: .
       - name: Compute version string
         id: version
         run: |
@@ -248,6 +249,7 @@ jobs:
   release:
     name: Publish nightly release
     needs: [sync, build]
+    if: needs.sync.outputs.changed == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -262,7 +264,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: nightly
-          target_commitish: ${{ env.NIGHTLY_BRANCH }}
           name: Nightly Build (${{ needs.sync.outputs.upstream-date }})
           prerelease: true
           make_latest: 'false'
