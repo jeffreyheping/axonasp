@@ -168,21 +168,6 @@ jobs:
             *.apk
             *.pkg.tar.zst
             *.zip
-            axonasp-http
-            axonasp-fastcgi
-            axonasp-cli
-            axonasp-mcp
-            axonasp-admin
-            axonasp-service
-            axonasp-testsuite
-            axonasp-fpm
-            axonasp-http.exe
-            axonasp-fastcgi.exe
-            axonasp-cli.exe
-            axonasp-mcp.exe
-            axonasp-admin.exe
-            axonasp-service.exe
-            axonasp-testsuite.exe
           if-no-files-found: error
 
   # ──────────────────────────────────────────────────────────────
@@ -237,11 +222,60 @@ jobs:
           if-no-files-found: error
 
   # ──────────────────────────────────────────────────────────────
+  # Windows installer (Inno Setup) — runs on a Windows runner
+  # ──────────────────────────────────────────────────────────────
+  build-windows-installer:
+    name: Build Windows installer ${{ matrix.arch }}
+    needs: [prepare, build]
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download Windows binaries from build job
+        uses: actions/download-artifact@v4
+        with:
+          name: axonasp-windows-${{ matrix.arch }}
+          path: .
+
+      - name: Extract Windows zip
+        run: |
+          $zip = Get-ChildItem axonasp-windows-*.zip | Select-Object -First 1
+          Expand-Archive -Path $zip.Name -DestinationPath . -Force
+          Get-ChildItem *.exe
+        shell: pwsh
+
+      - name: Build installer with Inno Setup
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DMyAppVersion="$env:VERSION" /DMyArchSuffix="$env:ARCH" installer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem installer-out\*.exe
+        shell: pwsh
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: axonasp-installer-${{ matrix.arch }}
+          path: installer-out\*.exe
+          if-no-files-found: error
+
+  # ──────────────────────────────────────────────────────────────
   # Publish everything to a GitHub Release (tag pushes only)
   # ──────────────────────────────────────────────────────────────
   release:
     name: Publish GitHub Release
-    needs: [build, build-wasm]
+    needs: [build, build-wasm, build-windows-installer]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -264,12 +298,4 @@ jobs:
             artifacts/**/*.apk
             artifacts/**/*.pkg.tar.zst
             artifacts/**/*.zip
-            artifacts/**/*.exe
-            artifacts/**/axonasp-http
-            artifacts/**/axonasp-fastcgi
-            artifacts/**/axonasp-cli
-            artifacts/**/axonasp-mcp
-            artifacts/**/axonasp-admin
-            artifacts/**/axonasp-service
-            artifacts/**/axonasp-testsuite
-            artifacts/**/axonasp-fpm
+            artifacts/**/*installer*.exe
