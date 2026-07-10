@@ -1,0 +1,221 @@
+# Nightly build: sync upstream → replay our patches → build all platforms → publish a rolling "nightly" release.
+#
+# Every day at 00:00 Beijing time (UTC 16:00) it:
+#   1. Fetches the latest upstream (guimaraeslucas/axonasp) main,
+#   2. Replays our fork-specific patches (nightly/overlay + nightly/apply.sh),
+#   3. Pushes the patched tree to the `nightly` branch,
+#   4. Builds all OS packages (reuses build-packages.yml) + a :nightly Docker image,
+#   5. Publishes/updates a rolling pre-release tagged `nightly`.
+#
+# The patch-replay approach means upstream can change go.mod/Dockerfile freely;
+# our patches are re-applied idempotently on top instead of merging.
+name: Nightly Build
+
+on:
+  schedule:
+    # UTC 16:00 = 00:00 Asia/Shanghai. GitHub cron can delay during peak load.
+    - cron: '0 16 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-build
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  UPSTREAM_REPO: guimaraeslucas/axonasp
+  NIGHTLY_BRANCH: nightly
+
+jobs:
+  # ─── 1. Sync upstream + replay patches → push to the `nightly` branch ───────
+  sync:
+    name: Sync upstream & apply patches
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      upstream-sha: ${{ steps.upstream-sha.outputs.value }}
+      upstream-date: ${{ steps.upstream-sha.outputs.date }}
+      changed: ${{ steps.commit.outputs.changed }}
+    steps:
+      - name: Checkout fork (carries nightly/ overlay + apply.sh)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream main
+        run: |
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream main
+          echo "::notice::upstream HEAD: $(git rev-parse upstream/main)"
+
+      - name: Record upstream SHA
+        id: upstream-sha
+        run: |
+          echo "value=$(git rev-parse upstream/main)" >> "$GITHUB_OUTPUT"
+          echo "date=$(git log -1 --format=%ci upstream/main)" >> "$GITHUB_OUTPUT"
+
+      - name: Overlay upstream code onto the working tree (keeps fork-only files)
+        run: |
+          # `git checkout upstream/main -- .` replaces every upstream-tracked file
+          # with the upstream version, but LEAVES files that exist only on fork main
+          # (nightly/, installer.iss, third_party/, tools/freebsd-pkg, ...) in place.
+          # So the tree becomes: upstream code + our fork-only patch files.
+          git checkout upstream/main -- .
+
+      - name: Set up Go (for go mod tidy inside apply.sh)
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Replay fork patches
+        run: bash nightly/apply.sh
+
+      - name: Commit patched tree
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No changes vs previous nightly"
+          else
+            SHORT=$(git rev-parse --short upstream/main)
+            git commit -m "nightly: sync upstream ${SHORT} + apply fork patches"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push to nightly branch
+        if: steps.commit.outputs.changed == 'true'
+        run: git push origin HEAD:refs/heads/${NIGHTLY_BRANCH} --force
+
+  # ─── 2. Build all OS packages (reuses the reusable build workflow) ─────────
+  build:
+    name: Build OS packages
+    needs: sync
+    if: always() && needs.sync.result == 'success'
+    uses: ./.github/workflows/build-packages.yml
+    with:
+      ref: nightly
+
+  # ─── 3. Build & smoke-test a :nightly Docker image (does NOT touch :latest) ─
+  docker:
+    name: Build Docker :nightly
+    needs: sync
+    if: always() && needs.sync.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout nightly branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.NIGHTLY_BRANCH }}
+          fetch-depth: 0
+
+      - name: Compute version string
+        id: version
+        run: |
+          PATCH=$(git rev-list --count HEAD)
+          SHORT=$(git rev-parse --short HEAD)
+          echo "value=2.3.${PATCH}.${SHORT}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU (multi-arch)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push :nightly image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/${{ github.repository }}:nightly
+          build-args: |
+            VERSION=${{ steps.version.outputs.value }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      - name: Smoke test — start container
+        run: |
+          docker run -d --name axonasp-nightly -p 8801:8801 \
+            ghcr.io/${{ github.repository }}:nightly
+
+      - name: Smoke test — wait for HTTP
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8801/ > /dev/null 2>&1; then
+              echo "Server is up after ${i} seconds"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Server did not start in time"
+          docker logs axonasp-nightly
+          exit 1
+
+      - name: Print container logs on failure
+        if: failure()
+        run: docker logs axonasp-nightly
+
+      - name: Stop and remove container
+        if: always()
+        run: docker rm -f axonasp-nightly || true
+
+  # ─── 4. Publish/refresh the rolling `nightly` pre-release ──────────────────
+  release:
+    name: Publish nightly release
+    needs: [sync, build]
+    if: always() && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List release assets
+        run: find artifacts -type f | sort
+
+      - name: Publish rolling nightly pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          target_commitish: ${{ env.NIGHTLY_BRANCH }}
+          name: Nightly Build (${{ needs.sync.outputs.upstream-date }})
+          prerelease: true
+          make_latest: 'false'
+          body: |
+            Automated nightly build.
+
+            **Upstream commit:** `${{ needs.sync.outputs.upstream-sha }}`
+            **Upstream date:** ${{ needs.sync.outputs.upstream-date }}
+            **Built:** ${{ github.run_id }}
+
+            This is an unverified automated build from the latest upstream code
+            plus this fork's packaging patches. Not for production use.
+          files: |
+            artifacts/**/*.deb
+            artifacts/**/*.rpm
+            artifacts/**/*.apk
+            artifacts/**/*.pkg.tar.zst
+            artifacts/**/*.zip
+            artifacts/**/*.tar.xz
+            artifacts/**/*.pkg
+            artifacts/**/*installer*.exe

@@ -35,7 +35,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
@@ -46,11 +45,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-    outputs:
-      # First tag that was actually pushed (sha-<short> on tag pushes, :latest on
-      # default-branch pushes). The integration-test job pulls this instead of
-      # hardcoding :latest, which is never published on tag-push triggers.
-      image: ${{ steps.test-image.outputs.value }}
 
     steps:
       - name: Checkout repository
@@ -118,21 +112,12 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: false
 
-      - name: Select image tag for integration test
-        id: test-image
-        run: |
-          TAG=$(echo "${{ steps.meta.outputs.tags }}" | grep -v '^$' | head -n1)
-          echo "Using integration-test image: ${TAG}"
-          echo "value=${TAG}" >> "$GITHUB_OUTPUT"
-
   # ─── Job 2: Docker Smoke Test (runs after image is published) ──────────────
   docker-test:
     name: Docker Integration Tests
     runs-on: ubuntu-latest
     needs: docker
     if: github.event_name != 'pull_request'
-    permissions:
-      packages: read
 
     steps:
       - name: Checkout repository
@@ -144,19 +129,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Start AxonASP container
         run: |
           docker run -d \
             --name axonasp-test \
             -p 8801:8801 \
-            ${{ needs.docker.outputs.image }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
       - name: Wait for server to be ready
         run: |

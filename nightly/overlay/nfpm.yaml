@@ -1,0 +1,113 @@
+# nfpm.yaml
+name: "axonasp"
+arch: "${ARCH}" # Injected by GitHub Actions (amd64, arm64, ...)
+platform: "linux"
+version: "${VERSION}" # Injected by GitHub Actions
+section: "web"
+priority: "extra"
+maintainer: "Lucas Guimarães - G3pix <axonasp@g3pix.com.br>"
+description: "AxonASP Server - ASP Classic server with Proxy, FastCGI, CLI, TestSuite and MCP support. Small, fast and secure alternative to IIS for hosting ASP applications using VBScript and JavaScript on modern platforms."
+vendor: "G3pix"
+homepage: "https://g3pix.com.br/axonasp"
+license: "MPL-2.0"
+recommends: 
+  - "net-tools" 
+
+archlinux:
+  packager: G3pix <axonasp@g3pix.com.br>
+
+scripts:
+  postinstall: ./post-install.sh
+
+contents:
+  # Binaries
+  - src: ./axonasp-http
+    dst: /opt/axonasp/axonasp-http
+  - src: ./axonasp-fastcgi
+    dst: /opt/axonasp/axonasp-fastcgi
+  - src: ./axonasp-cli
+    dst: /opt/axonasp/axonasp-cli
+  - src: ./axonasp-mcp
+    dst: /opt/axonasp/axonasp-mcp
+  - src: ./axonasp-testsuite
+    dst: /opt/axonasp/axonasp-testsuite
+  - src: ./axonasp-service
+    dst: /opt/axonasp/axonasp-service
+  - src: ./axonasp-admin
+    dst: /opt/axonasp/axonasp-admin
+  - src: ./install-service.sh
+    dst: /opt/axonasp/install-service.sh
+  - src: ./uninstall-service.sh
+    dst: /opt/axonasp/uninstall-service.sh
+  - src: ./post-install.sh
+    dst: /opt/axonasp/post-install.sh
+  - src: ./axonasp-fpm
+    dst: /opt/axonasp/axonasp-fpm
+
+  # Standalone files
+  - src: ./LICENSE.txt
+    dst: /opt/axonasp/LICENSE.txt
+  - src: ./global.asa
+    dst: /opt/axonasp/global.asa
+    type: config|noreplace
+
+  # License for Archlinux package
+  - src: ./LICENSE.txt
+    dst: /usr/share/licenses/axonasp/LICENSE
+    file_info:
+      mode: 0644
+
+  # Directories
+  - src: ./www/
+    dst: /opt/axonasp/www/
+    type: tree
+  - src: ./config/
+    dst: /opt/axonasp/config/
+    type: config|noreplace
+  - src: ./mcp/
+    dst: /opt/axonasp/mcp/
+    type: tree
+  - src: ./fpm/fpm.d/
+    dst: /opt/axonasp/fpm/fpm.d/
+    type: config|noreplace
+
+# Empty Folders
+  - dst: /opt/axonasp/temp/
+    type: dir
+  - dst: /opt/axonasp/temp/cache/
+    type: dir
+  - dst: /opt/axonasp/temp/session/
+    type: dir
+
+  # Symlink for easier access
+  - src: /opt/axonasp/axonasp-http
+    dst: /usr/bin/axonasp-http
+    type: symlink
+  - src: /opt/axonasp/axonasp-cli
+    dst: /usr/bin/axonasp-cli
+    type: symlink
+  - src: /opt/axonasp/axonasp-fastcgi
+    dst: /usr/bin/axonasp-fastcgi
+    type: symlink
+  - src: /opt/axonasp/axonasp-mcp
+    dst: /usr/bin/axonasp-mcp
+    type: symlink
+  - src: /opt/axonasp/axonasp-admin
+    dst: /usr/bin/axonasp-admin
+    type: symlink
+  - src: /opt/axonasp/axonasp-testsuite
+    dst: /usr/bin/axonasp-testsuite
+    type: symlink
+  - src: /opt/axonasp/config/axonasp.toml
+    dst: /etc/axonasp/config/axonasp.toml
+    type: symlink
+  - src: /opt/axonasp/fpm/fpm.d/
+    dst: /etc/axonasp/fpm/fpm.d/
+    type: symlink
+  - src: /opt/axonasp/temp/cache/
+    dst: /var/cache/axonasp/
+    type: symlink
+  - src: /opt/axonasp/temp/session/
+    dst: /var/lib/axonasp/session/
+    type: symlink
+
