@@ -31,6 +31,7 @@ require (
 	github.com/sijms/go-ora/v2 v2.9.0
 	github.com/spf13/pflag v1.0.10
 	github.com/spf13/viper v1.21.0
+	github.com/ulikunitz/xz v0.5.12
 	github.com/yuin/goldmark v1.8.2
 	golang.org/x/crypto v0.53.0
 	golang.org/x/image v0.43.0

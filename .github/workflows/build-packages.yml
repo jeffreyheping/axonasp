@@ -283,17 +283,18 @@ jobs:
           name: axonasp-windows-${{ matrix.arch }}
           path: .
 
-      - name: Extract Windows zip and flatten
+      - name: Extract Windows zip
         run: |
           $zip = Get-ChildItem axonasp-windows-*.zip | Select-Object -First 1
           Expand-Archive -Path $zip.Name -DestinationPath . -Force
-          # Move contents from subdirectory (axonasp-windows-<arch>/) to root
+          # Find the extracted subdirectory and rename it to 'installer-src'
           $subdir = Get-ChildItem -Directory | Where-Object { $_.Name -like "axonasp-windows-*" } | Select-Object -First 1
           if ($subdir) {
-            Get-ChildItem $subdir.FullName | Move-Item -Destination . -Force
-            Remove-Item $subdir.FullName
+            Rename-Item -Path $subdir.FullName -NewName "installer-src"
           }
-          Get-ChildItem *.exe
+          # Copy installer.iss into the source directory
+          Copy-Item installer.iss installer-src\
+          Get-ChildItem installer-src\*.exe
         shell: pwsh
 
       - name: Build installer with Inno Setup
@@ -301,16 +302,17 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
           ARCH: ${{ matrix.arch }}
         run: |
+          cd installer-src
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DMyAppVersion="$env:VERSION" /DMyArchSuffix="$env:ARCH" installer.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Get-ChildItem installer-out\*.exe
+          Get-ChildItem Output\*.exe
         shell: pwsh
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: axonasp-installer-${{ matrix.arch }}
-          path: installer-out\*.exe
+          path: installer-src\Output\*.exe
           if-no-files-found: error
 
   # ──────────────────────────────────────────────────────────────
