@@ -1,0 +1,17 @@
+# Test 4: Check if reusable workflow call causes startup_failure
+name: Nightly Test Step 4
+
+on:
+  workflow_dispatch:
+
+jobs:
+  first:
+    name: First job
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "First job"
+  # This job calls build-packages.yml as a reusable workflow
+  build:
+    name: Call reusable workflow
+    needs: first
+    uses: ./.github/workflows/build-packages.yml
