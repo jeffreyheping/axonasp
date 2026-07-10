@@ -69,7 +69,7 @@ function NeedsAddPath(Param: string): boolean;
 var
   OrigPath: string;
 begin
-  if not RegQueryValueExpand(HKLM, 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment', 'Path', OrigPath) then begin
+  if not RegQueryStringValue(HKLM, 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment', 'Path', OrigPath) then begin
     Result := True;
     exit;
   end;
