@@ -1,20 +1,18 @@
-# Nightly build: sync upstream → replay our patches → build all platforms → publish a rolling "nightly" release.
+# Nightly build: sync upstream → replay patches → build all platforms → publish nightly release.
 #
 # Every day at 09:00 Beijing time (UTC 01:00) it:
-#   1. Fetches the latest upstream (guimaraeslucas/axonasp) main,
-#   2. Replays our fork-specific patches (nightly/overlay + nightly/apply.sh),
-#   3. Pushes the patched tree to the `nightly` branch,
-#   4. Builds all OS packages (reuses build-packages.yml) + a :nightly Docker image,
+#   1. Fetches latest upstream (guimaraeslucas/axonasp) main,
+#   2. Replays fork-specific patches,
+#   3. Pushes patched tree to the `nightly` branch,
+#   4. Builds all OS packages + a :nightly Docker image,
 #   5. Publishes/updates a rolling pre-release tagged `nightly`.
 #
-# The patch-replay approach means upstream can change go.mod/Dockerfile freely;
-# our patches are re-applied idempotently on top instead of merging.
+# NOTE: This workflow cannot use reusable workflow calls because GitHub
+# restricts them in fork repositories. All build logic is inline.
 name: Nightly Build
 
 on:
   schedule:
-    # UTC 01:00 = 09:00 Asia/Shanghai. Runs in the Beijing morning so it picks
-    # up the upstream author's previous-evening commits.
     - cron: '0 1 * * *'
   workflow_dispatch:
 
@@ -27,7 +25,6 @@ env:
   NIGHTLY_BRANCH: nightly
 
 jobs:
-  # ─── 1. Sync upstream + replay patches → push to the `nightly` branch ───────
   sync:
     name: Sync upstream & apply patches
     runs-on: ubuntu-latest
@@ -38,40 +35,28 @@ jobs:
       upstream-date: ${{ steps.upstream-sha.outputs.date }}
       changed: ${{ steps.commit.outputs.changed }}
     steps:
-      - name: Checkout fork (carries nightly/ overlay + apply.sh)
+      - name: Checkout fork
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Fetch upstream main
         run: |
           git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
           git fetch upstream main
-          echo "::notice::upstream HEAD: $(git rev-parse upstream/main)"
-
       - name: Record upstream SHA
         id: upstream-sha
         run: |
           echo "value=$(git rev-parse upstream/main)" >> "$GITHUB_OUTPUT"
           echo "date=$(git log -1 --format=%ci upstream/main)" >> "$GITHUB_OUTPUT"
-
-      - name: Overlay upstream code onto the working tree (keeps fork-only files)
-        run: |
-          # `git checkout upstream/main -- .` replaces every upstream-tracked file
-          # with the upstream version, but LEAVES files that exist only on fork main
-          # (nightly/, installer.iss, third_party/, tools/freebsd-pkg, ...) in place.
-          # So the tree becomes: upstream code + our fork-only patch files.
-          git checkout upstream/main -- .
-
-      - name: Set up Go (for go mod tidy inside apply.sh)
+      - name: Overlay upstream code (keeps fork-only files)
+        run: git checkout upstream/main -- .
+      - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
-
       - name: Replay fork patches
         run: bash nightly/apply.sh
-
       - name: Commit patched tree
         id: commit
         run: |
@@ -80,26 +65,124 @@ jobs:
           git add -A
           if git diff --cached --quiet; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::No changes vs previous nightly"
           else
             SHORT=$(git rev-parse --short upstream/main)
             git commit -m "nightly: sync upstream ${SHORT} + apply fork patches"
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
-
       - name: Push to nightly branch
         if: steps.commit.outputs.changed == 'true'
         run: git push origin HEAD:refs/heads/${NIGHTLY_BRANCH} --force
 
-  # ─── 2. Build all OS packages (reuses the reusable build workflow) ─────────
   build:
     name: Build OS packages
     needs: sync
-    uses: ./.github/workflows/build-packages.yml
-    with:
-      ref: nightly
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout nightly branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.NIGHTLY_BRANCH }}
+          fetch-depth: 0
+      - name: Compute version string
+        id: version
+        run: |
+          PATCH=$(git rev-list --count HEAD 2>/dev/null || echo "0")
+          REVISION=$(git rev-parse --short HEAD 2>/dev/null || echo "0")
+          echo "value=2.3.${PATCH}.${REVISION}" >> "$GITHUB_OUTPUT"
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install dependencies
+        run: go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest
+      - name: Build Linux binaries
+        env:
+          FULL_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-http ./server
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-fastcgi ./fastcgi
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-cli ./cli
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-mcp ./mcp
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-admin ./admin
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-service ./service
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-testsuite ./testsuite
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-fpm ./fpm
+      - name: Generate Windows Resources
+        run: |
+          export PATH=$PATH:$(go env GOPATH)/bin
+          go generate ./...
+      - name: Build Windows binaries
+        env:
+          FULL_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-http.exe ./server
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-fastcgi.exe ./fastcgi
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-cli.exe ./cli
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-mcp.exe ./mcp
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-admin.exe ./admin
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-service.exe ./service
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-testsuite.exe ./testsuite
+      - name: Remove test directory
+        run: rm -rf ./www/test/ || true
+      - name: Install nFPM
+        run: |
+          echo 'deb [trusted=yes] https://repo.goreleaser.com/apt/ /' | sudo tee /etc/apt/sources.list.d/goreleaser.list
+          sudo apt-get update
+          sudo apt-get install -y nfpm
+      - name: Build Debian package
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: nfpm package --packager deb --target .
+      - name: Build Red Hat package
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: nfpm package --packager rpm --target .
+      - name: Build Alpine package
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: nfpm package --packager apk --target .
+      - name: Build Archlinux package
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: nfpm package --packager archlinux --target .
+      - name: Create Windows Portable Zip
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          mkdir -p axonasp-windows
+          cp *.exe axonasp-windows/
+          cp -r www config mcp LICENSE.txt LEGAL-DISCLAIMER.md global.asa iis-http.cmd install-service.ps1 uninstall-service.ps1 axonasp-windows/
+          zip -r "axonasp-windows-${VERSION}-amd64.zip" axonasp-windows/
+      - name: Build macOS ARM64 Zip
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          mkdir -p axonasp-macos-arm64
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.Version=${VERSION}" -o axonasp-macos-arm64/axonasp-http ./server
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.Version=${VERSION}" -o axonasp-macos-arm64/axonasp-fastcgi ./fastcgi
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.Version=${VERSION}" -o axonasp-macos-arm64/axonasp-cli ./cli
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.Version=${VERSION}" -o axonasp-macos-arm64/axonasp-mcp ./mcp
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.Version=${VERSION}" -o axonasp-macos-arm64/axonasp-admin ./admin
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.Version=${VERSION}" -o axonasp-macos-arm64/axonasp-service ./service
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.Version=${VERSION}" -o axonasp-macos-arm64/axonasp-testsuite ./testsuite
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.Version=${VERSION}" -o axonasp-macos-arm64/axonasp-fpm ./fpm
+          cp -r www config mcp LICENSE.txt LEGAL-DISCLAIMER.md global.asa axonasp-macos-arm64/
+          zip -r "axonasp-macos-${VERSION}-arm64.zip" axonasp-macos-arm64/
+      - name: Upload Packages as Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: axonasp-packages
+          path: |
+            *.deb
+            *.rpm
+            *.apk
+            *.pkg.tar.zst
+            *.zip
 
-  # ─── 3. Build & smoke-test a :nightly Docker image (does NOT touch :latest) ─
   docker:
     name: Build Docker :nightly
     needs: sync
@@ -113,27 +196,22 @@ jobs:
         with:
           ref: ${{ env.NIGHTLY_BRANCH }}
           fetch-depth: 0
-
       - name: Compute version string
         id: version
         run: |
           PATCH=$(git rev-list --count HEAD)
           SHORT=$(git rev-parse --short HEAD)
           echo "value=2.3.${PATCH}.${SHORT}" >> "$GITHUB_OUTPUT"
-
-      - name: Set up QEMU (multi-arch)
+      - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GitHub Container Registry
+      - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Build & push :nightly image
         uses: docker/build-push-action@v6
         with:
@@ -142,17 +220,12 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ghcr.io/${{ github.repository }}:nightly
-          build-args: |
-            VERSION=${{ steps.version.outputs.value }}
+          build-args: VERSION=${{ steps.version.outputs.value }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
-
       - name: Smoke test — start container
-        run: |
-          docker run -d --name axonasp-nightly -p 8801:8801 \
-            ghcr.io/${{ github.repository }}:nightly
-
+        run: docker run -d --name axonasp-nightly -p 8801:8801 ghcr.io/${{ github.repository }}:nightly
       - name: Smoke test — wait for HTTP
         run: |
           for i in $(seq 1 30); do
@@ -165,16 +238,13 @@ jobs:
           echo "Server did not start in time"
           docker logs axonasp-nightly
           exit 1
-
       - name: Print container logs on failure
         if: failure()
         run: docker logs axonasp-nightly
-
       - name: Stop and remove container
         if: always()
         run: docker rm -f axonasp-nightly || true
 
-  # ─── 4. Publish/refresh the rolling `nightly` pre-release ──────────────────
   release:
     name: Publish nightly release
     needs: [sync, build]
@@ -186,10 +256,8 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-
       - name: List release assets
         run: find artifacts -type f | sort
-
       - name: Publish rolling nightly pre-release
         uses: softprops/action-gh-release@v2
         with:
