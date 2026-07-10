@@ -370,11 +370,108 @@ jobs:
           if-no-files-found: error
 
   # ──────────────────────────────────────────────────────────────
+  # FreeBSD .pkg installer — runs inside a FreeBSD VM
+  # ──────────────────────────────────────────────────────────────
+  build-freebsd-pkg:
+    name: Build FreeBSD pkg ${{ matrix.arch }}
+    needs: [prepare, build]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: vmactions/freebsd-vm@v1 }
+          - { arch: arm64, runner: vmactions/freebsd-vm@v1, freebsd_arch: aarch64 }
+    steps:
+      - name: Download FreeBSD tarball from build job
+        uses: actions/download-artifact@v4
+        with:
+          name: axonasp-freebsd-${{ matrix.arch }}
+          path: .
+
+      - name: Install gtar for tarball extraction
+        run: |
+          sudo pkg update -f
+          sudo pkg install -y gtar
+
+      - name: Build .pkg
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -e
+          tarball=$(ls -1 axonasp-freebsd-*.tar.xz | head -n1)
+          echo ">>> using $tarball"
+
+          STAGE=/tmp/axonasp-stage
+          SCRIPTS=/tmp/axonasp-scripts
+          OUT=/tmp/axonasp-pkg-out
+          rm -rf "$STAGE" "$SCRIPTS" "$OUT"
+          mkdir -p "$STAGE" "$SCRIPTS" "$OUT"
+
+          gtar -xJf "$tarball" -C "$STAGE"
+          # tarball contains axonasp-freebsd-<arch>/{binaries, www, config, ...}
+          # flatten into /opt/axonasp in the staging root
+          SUBDIR=$(ls "$STAGE" | head -n1)
+          mv "$STAGE/$SUBDIR/"* "$STAGE/"
+          rmdir "$STAGE/$SUBDIR"
+
+          # post-install: create /usr/local/bin symlinks
+          cat > "$SCRIPTS/+POST_INSTALL" <<'SCRIPT'
+          #!/bin/sh
+          for bin in axonasp-http axonasp-fastcgi axonasp-cli axonasp-mcp axonasp-admin axonasp-service axonasp-testsuite axonasp-fpm; do
+              if [ -f "/opt/axonasp/$bin" ]; then
+                  ln -sf "/opt/axonasp/$bin" "/usr/local/bin/$bin"
+              fi
+          done
+          SCRIPT
+          chmod +x "$SCRIPTS/+POST_INSTALL"
+
+          cat > "$SCRIPTS/+DEINSTALL" <<'SCRIPT'
+          #!/bin/sh
+          for bin in axonasp-http axonasp-fastcgi axonasp-cli axonasp-mcp axonasp-admin axonasp-service axonasp-testsuite axonasp-fpm; do
+              rm -f "/usr/local/bin/$bin"
+          done
+          SCRIPT
+          chmod +x "$SCRIPTS/+DEINSTALL"
+
+          # Manifest: list all files, prefixed with the install prefix /
+          (cd "$STAGE" && find . -type f | sort | sed 's|^\./||' | awk '{print "/" $0}') > /tmp/manifest.txt
+
+          cd "$STAGE"
+          pkg create -M /tmp/manifest.txt \
+                     -p / \
+                     -s "$SCRIPTS" \
+                     -o "$OUT" \
+                     -f tzst \
+                     -k \
+                     -t "AxonASP" \
+                     -c "AxonASP Server ${VERSION} for FreeBSD ${ARCH}" \
+                     -d "AxonASP Server runtime" \
+                     -v "${VERSION}" \
+                     -u "https://g3pix.com.br/axonasp" \
+                     -m "G3pix <axonasp@g3pix.com.br>" \
+                     -l "MPL20" \
+                     "axonasp-${VERSION}.pkg"
+
+          echo ">>> built:"
+          ls -la "$OUT"
+
+      - name: Upload pkg artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: axonasp-freebsd-pkg-${{ matrix.arch }}
+          path: /tmp/axonasp-pkg-out/*.pkg
+          if-no-files-found: error
+
+  # ──────────────────────────────────────────────────────────────
   # Publish everything to a GitHub Release (tag pushes only)
   # ──────────────────────────────────────────────────────────────
   release:
     name: Publish GitHub Release
-    needs: [build, build-wasm, build-windows-installer, build-macos-installer]
+    needs: [build, build-wasm, build-windows-installer, build-macos-installer, build-freebsd-pkg]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
