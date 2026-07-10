@@ -292,8 +292,9 @@ jobs:
           if ($subdir) {
             Rename-Item -Path $subdir.FullName -NewName "installer-src"
           }
-          # Copy installer.iss into the source directory
+          # Copy installer.iss and resources into the source directory
           Copy-Item installer.iss installer-src\
+          Copy-Item -Recurse resources installer-src\resources -Force
           Get-ChildItem installer-src\*.exe
         shell: pwsh
 
