@@ -51,6 +51,8 @@ jobs:
           - { goos: darwin,  goarch: arm64 }
           - { goos: windows, goarch: amd64 }
           - { goos: windows, goarch: arm64 }
+          - { goos: freebsd, goarch: amd64 }
+          - { goos: freebsd, goarch: arm64 }
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -158,6 +160,23 @@ jobs:
           zip -r "axonasp-macos-${VERSION}-${ARCH}.zip" "${STAGE}/"
           ls -la axonasp-macos-*.zip
 
+      # ──────────────────────────────────────────────────────────────
+      # FreeBSD: portable tarball (.tar.xz)
+      # ──────────────────────────────────────────────────────────────
+      - name: Create FreeBSD portable tarball
+        if: matrix.goos == 'freebsd'
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          ARCH: ${{ matrix.goarch }}
+        run: |
+          STAGE="axonasp-freebsd-${ARCH}"
+          mkdir -p "${STAGE}"
+          cp axonasp-http axonasp-fastcgi axonasp-cli axonasp-mcp \
+             axonasp-admin axonasp-service axonasp-testsuite axonasp-fpm "${STAGE}/"
+          cp -r www config mcp LICENSE.txt LEGAL-DISCLAIMER.md global.asa "${STAGE}/"
+          tar -cJf "axonasp-freebsd-${VERSION}-${ARCH}.tar.xz" "${STAGE}/"
+          ls -la axonasp-freebsd-*.tar.xz
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -168,6 +187,7 @@ jobs:
             *.apk
             *.pkg.tar.zst
             *.zip
+            *.tar.xz
           if-no-files-found: error
 
   # ──────────────────────────────────────────────────────────────
@@ -377,5 +397,6 @@ jobs:
             artifacts/**/*.apk
             artifacts/**/*.pkg.tar.zst
             artifacts/**/*.zip
+            artifacts/**/*.tar.xz
             artifacts/**/*.pkg
             artifacts/**/*installer*.exe

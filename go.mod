@@ -42,6 +42,8 @@ require (
 	modernc.org/sqlite v1.53.0
 )
 
+replace github.com/ricochet2200/go-disk-usage/du => ./third_party/go-disk-usage
+
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/RoaringBitmap/roaring v1.9.4 // indirect
