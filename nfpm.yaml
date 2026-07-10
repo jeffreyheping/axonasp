@@ -1,6 +1,6 @@
 # nfpm.yaml
 name: "axonasp"
-arch: "amd64"
+arch: "${ARCH}" # Injected by GitHub Actions (amd64, arm64, ...)
 platform: "linux"
 version: "${VERSION}" # Injected by GitHub Actions
 section: "web"
