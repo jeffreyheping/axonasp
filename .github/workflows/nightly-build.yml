@@ -32,6 +32,7 @@ jobs:
       upstream-sha: ${{ steps.upstream-sha.outputs.value }}
       upstream-date: ${{ steps.upstream-sha.outputs.date }}
       changed: ${{ steps.commit.outputs.changed }}
+      version: ${{ steps.version.outputs.value }}
     steps:
       - name: Checkout fork
         uses: actions/checkout@v4
@@ -55,6 +56,12 @@ jobs:
           cache: true
       - name: Replay fork patches
         run: bash nightly/apply.sh
+      - name: Compute version string
+        id: version
+        run: |
+          PATCH=$(git rev-list --count HEAD 2>/dev/null || echo "0")
+          REVISION=$(git rev-parse --short HEAD 2>/dev/null || echo "0")
+          echo "value=2.3.${PATCH}.${REVISION}" >> "$GITHUB_OUTPUT"
       - name: Check if anything changed
         id: commit
         run: |
@@ -86,12 +93,6 @@ jobs:
         with:
           name: patched-workspace
           path: .
-      - name: Compute version string
-        id: version
-        run: |
-          PATCH=$(git rev-list --count HEAD 2>/dev/null || echo "0")
-          REVISION=$(git rev-parse --short HEAD 2>/dev/null || echo "0")
-          echo "value=2.3.${PATCH}.${REVISION}" >> "$GITHUB_OUTPUT"
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -101,7 +102,7 @@ jobs:
         run: go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest
       - name: Build Linux binaries
         env:
-          FULL_VERSION: ${{ steps.version.outputs.value }}
+          FULL_VERSION: ${{ needs.sync.outputs.version }}
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-http ./server
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-fastcgi ./fastcgi
@@ -117,7 +118,7 @@ jobs:
           go generate ./...
       - name: Build Windows binaries
         env:
-          FULL_VERSION: ${{ steps.version.outputs.value }}
+          FULL_VERSION: ${{ needs.sync.outputs.version }}
         run: |
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-http.exe ./server
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-fastcgi.exe ./fastcgi
@@ -135,23 +136,23 @@ jobs:
           sudo apt-get install -y nfpm
       - name: Build Debian package
         env:
-          VERSION: ${{ steps.version.outputs.value }}
+          VERSION: ${{ needs.sync.outputs.version }}
         run: nfpm package --packager deb --target .
       - name: Build Red Hat package
         env:
-          VERSION: ${{ steps.version.outputs.value }}
+          VERSION: ${{ needs.sync.outputs.version }}
         run: nfpm package --packager rpm --target .
       - name: Build Alpine package
         env:
-          VERSION: ${{ steps.version.outputs.value }}
+          VERSION: ${{ needs.sync.outputs.version }}
         run: nfpm package --packager apk --target .
       - name: Build Archlinux package
         env:
-          VERSION: ${{ steps.version.outputs.value }}
+          VERSION: ${{ needs.sync.outputs.version }}
         run: nfpm package --packager archlinux --target .
       - name: Create Windows Portable Zip
         env:
-          VERSION: ${{ steps.version.outputs.value }}
+          VERSION: ${{ needs.sync.outputs.version }}
         run: |
           mkdir -p axonasp-windows
           cp *.exe axonasp-windows/
@@ -159,7 +160,7 @@ jobs:
           zip -r "axonasp-windows-${VERSION}-amd64.zip" axonasp-windows/
       - name: Build macOS ARM64 Zip
         env:
-          VERSION: ${{ steps.version.outputs.value }}
+          VERSION: ${{ needs.sync.outputs.version }}
         run: |
           mkdir -p axonasp-macos-arm64
           CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.Version=${VERSION}" -o axonasp-macos-arm64/axonasp-http ./server
@@ -197,12 +198,6 @@ jobs:
         with:
           name: patched-workspace
           path: .
-      - name: Compute version string
-        id: version
-        run: |
-          PATCH=$(git rev-list --count HEAD)
-          SHORT=$(git rev-parse --short HEAD)
-          echo "value=2.3.${PATCH}.${SHORT}" >> "$GITHUB_OUTPUT"
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
@@ -221,7 +216,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ghcr.io/${{ github.repository }}:nightly
-          build-args: VERSION=${{ steps.version.outputs.value }}
+          build-args: VERSION=${{ needs.sync.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
