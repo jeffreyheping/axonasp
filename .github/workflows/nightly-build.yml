@@ -608,6 +608,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      RETAIN_NIGHTLY_RELEASES: 7
     steps:
       - name: Download release artifacts
         env:
@@ -615,8 +617,6 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          # List all artifacts for this run, excluding patched-workspace and
-          # docker build artifacts (which are not release assets).
           ARTIFACTS=$(gh api \
             "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
             --jq '.artifacts[] | select(.name != "patched-workspace" and (.name | test("dockerbuild") | not)) | "\(.name)\t\(.archive_download_url)"')
@@ -627,13 +627,20 @@ jobs:
             unzip -q -o "/tmp/$name.zip" -d "artifacts/$name"
             rm -f "/tmp/$name.zip"
           done
+      - name: Compute release tag and name
+        id: release-tag
+        run: |
+          DATE_STR=$(date -u +%Y%m%d)
+          SHORT_SHA=$(echo "${{ needs.sync.outputs.upstream-sha }}" | cut -c1-7)
+          echo "tag=nightly-${DATE_STR}-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "name=Nightly Build ${DATE_STR} (upstream ${SHORT_SHA})" >> "$GITHUB_OUTPUT"
       - name: List release assets
         run: find artifacts -type f | sort
-      - name: Publish rolling nightly pre-release
+      - name: Publish nightly pre-release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: nightly
-          name: Nightly Build (${{ needs.sync.outputs.upstream-date }})
+          tag_name: ${{ steps.release-tag.outputs.tag }}
+          name: ${{ steps.release-tag.outputs.name }}
           prerelease: true
           make_latest: 'false'
           body: |
@@ -654,3 +661,28 @@ jobs:
             artifacts/**/*.tar.xz
             artifacts/**/*.pkg
             artifacts/**/*installer*.exe
+      - name: Prune old nightly releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          RETAIN=${RETAIN_NIGHTLY_RELEASES:-7}
+          echo "Pruning nightly releases, keeping the latest ${RETAIN}..."
+          # List all nightly releases (tag starts with "nightly-") sorted by created_at desc
+          RELEASES=$(gh api "/repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            --jq '.[] | select(.tag_name | startswith("nightly-")) | "\(.id)\t\(.tag_name)\t\(.created_at)"' \
+            | sort -k3 -r)
+          COUNT=$(echo "$RELEASES" | grep -c . || true)
+          echo "Found ${COUNT} nightly releases total"
+          if [ "$COUNT" -le "$RETAIN" ]; then
+            echo "Nothing to prune (${COUNT} <= ${RETAIN})"
+            exit 0
+          fi
+          # Skip the first RETAIN entries, delete the rest
+          echo "$RELEASES" | tail -n +$((RETAIN + 1)) | while IFS=$'\t' read -r id tag created; do
+            echo "  Deleting $tag (created $created)..."
+            gh api -X DELETE "/repos/${GITHUB_REPOSITORY}/releases/$id"
+            # Also delete the associated tag
+            gh api -X DELETE "/repos/${GITHUB_REPOSITORY}/git/refs/tags/$tag" || true
+          done
+          echo "Done pruning"
