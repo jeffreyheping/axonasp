@@ -9,6 +9,9 @@
 #ifndef MyArchSuffix
   #define MyArchSuffix "amd64"
 #endif
+#ifndef MyVersionInfoVersion
+  #define MyVersionInfoVersion MyAppVersion
+#endif
 
 [Setup]
 AppId={{0E1F2C1D-3A4B-5C6D-7E8F-901234567890}}
@@ -29,7 +32,7 @@ SolidCompression=yes
 WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64 arm64
 UninstallDisplayIcon={app}\axonasp-http.exe
-VersionInfoVersion={#MyAppVersion}
+VersionInfoVersion={#MyVersionInfoVersion}
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription=AxonASP Server Setup
 VersionInfoProductName=AxonASP Server

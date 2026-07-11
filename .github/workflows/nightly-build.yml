@@ -351,7 +351,8 @@ jobs:
           ARCH: ${{ matrix.arch }}
         run: |
           cd installer-src
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DMyAppVersion="$env:VERSION" /DMyArchSuffix="$env:ARCH" installer.iss
+          $verInfo = ($env:VERSION -split '\.')[0..2] -join '.'
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DMyAppVersion="$env:VERSION" /DMyArchSuffix="$env:ARCH" /DMyVersionInfoVersion="$verInfo" installer.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem Output\*.exe
         shell: pwsh
