@@ -31,10 +31,16 @@ It is the correct choice when you host one application and do not require pool o
 At startup, the worker resolves `global.asa` in this order:
 
 1. Explicit `--config.global_asa` directory.
-2. `server.web_root` from the active TOML config.
-3. Current working directory.
+2. Current working directory.
+3. `server.web_root` from the active TOML config.
 
 If `--config.global_asa` is explicitly provided and `global.asa` is missing in that directory, startup fails with an internal 500 state.
+
+Path enforcement for Step 3:
+
+- If `server.web_root` is absolute, FastCGI resolves it strictly as absolute.
+- If `server.web_root` is relative, FastCGI resolves it relative to the current working directory.
+- FastCGI does not rewrite absolute `server.web_root` values to `./www`.
 
 ## Model 2: Multiple Manual Standalone Processes
 
@@ -78,6 +84,17 @@ The manager needs root initialization to:
 - Prepare and own socket and temporary directories.
 - Apply process and memory controls correctly.
 - Enforce security boundaries between pools.
+
+### Pool Reload Behavior
+
+AxonASP-FPM reloads changed pool files with `SIGUSR2` (or `SIGHUP`) using selective restart behavior:
+
+- New `.conf` files start new pools.
+- Modified `.conf` files gracefully restart only their own pools.
+- Unmodified pools continue running without interruption.
+- Worker shutdown on reload sends `SIGTERM` first, then force-kill only if the worker does not exit during the grace window.
+
+This keeps active applications stable while allowing targeted configuration rollout.
 
 ## FastCGI Worker Endpoint Formats
 
@@ -135,6 +152,22 @@ Examples:
 ./axonasp-fastcgi --fastcgi.server_port unix:/var/run/axonasp/site-a.sock
 ./axonasp-fastcgi --config.config_file /opt/axonasp/config/site-a.toml --config.global_asa /opt/axonasp/sites/site-a
 ```
+
+## IIS Administrator Translation Guide
+
+Use this mapping if your operational model comes from IIS:
+
+| AxonASP Runtime Term | IIS Term | Migration Note |
+|---|---|---|
+| FPM pool `.conf` file | Application Pool | Isolate each application with a dedicated pool file. |
+| `uid` and `gid` per pool | AppPool Identity | Use unique Unix identities for boundary isolation. |
+| `global_asa` per pool | Application boundary in a virtual directory | Explicit `global_asa` makes startup scope deterministic per app context. |
+| One Unix socket per pool | Dedicated handler endpoint | Do not share sockets between unrelated applications. |
+
+Production recommendation:
+
+- Use absolute paths in pool and runtime settings wherever possible (`config_file`, `global_asa`, `app_path`, `tmp_dir`, socket path).
+- Keep one explicit ownership model per endpoint: standalone or FPM, never both.
 
 ## Remarks
 

@@ -46,6 +46,7 @@ type PoolConfig struct {
 	GID           uint32 `toml:"gid"`
 	Socket        string `toml:"socket"`
 	ConfigFile    string `toml:"config_file"`
+	GlobalAsa     string `toml:"global_asa"`
 	AppPath       string `toml:"app_path"`
 	MemoryLimitMB int    `toml:"memory_limit_mb"`
 	MaxRestarts   int    `toml:"max_restarts"`
@@ -57,10 +58,32 @@ const (
 	WorkerExec = "/opt/axonasp/axonasp-fastcgi"
 )
 
+type poolConfigRevision struct {
+	modTimeUnixNano int64
+	sizeBytes       int64
+}
+
+type poolHandle struct {
+	cancel   context.CancelFunc
+	done     chan struct{}
+	revision poolConfigRevision
+}
+
+type restartAction struct {
+	configPath string
+	previous   poolHandle
+	revision   poolConfigRevision
+}
+
 // Global state to track running pools and prevent duplicates during reload
 var (
-	activePools = make(map[string]context.CancelFunc)
+	activePools = make(map[string]poolHandle)
 	poolsMutex  sync.Mutex
+	configDir   = ConfigDir
+
+	launchPoolSupervisor = func(ctx context.Context, configPath string, done chan struct{}) {
+		superviseWorker(ctx, configPath, done)
+	}
 )
 
 // normalizePoolSocketEndpoint normalizes pool socket configuration and returns
@@ -108,63 +131,157 @@ func main() {
 
 	// 4. Main Event Loop
 	for sig := range sigChan {
-		switch sig {
-		case syscall.SIGHUP:
-			log.Println("SIGHUP received. Rescanning configuration directory for new applications...")
-			scanAndLoadConfigs()
-		case syscall.SIGINT, syscall.SIGTERM:
-			log.Printf("%s received.\n Shutting down G3pix ❖ AxonASP FPM manager...", sig.String())
-			shutdownAllPools()
+		if shouldStop := handleManagerSignal(sig); shouldStop {
 			return
-		case syscall.SIGUSR2:
-			log.Println("SIGUSR2 (reload) received. Rescanning configuration directory for new applications...")
-			scanAndLoadConfigs()
 		}
 	}
 }
 
-// scanAndLoadConfigs reads the config directory and starts supervisors for NEW files only.
-func scanAndLoadConfigs() {
-	poolsMutex.Lock()
-	defer poolsMutex.Unlock()
+func handleManagerSignal(sig os.Signal) bool {
+	switch sig {
+	case syscall.SIGHUP:
+		log.Println("SIGHUP received. Rescanning configuration directory...")
+		scanAndLoadConfigs()
+		return false
+	case syscall.SIGINT, syscall.SIGTERM:
+		log.Printf("%s received.\n Shutting down G3pix ❖ AxonASP FPM manager...", sig.String())
+		shutdownAllPools()
+		return true
+	case syscall.SIGUSR2:
+		log.Println("SIGUSR2 (reload) received. Reloading changed pool configurations...")
+		scanAndLoadConfigs()
+		return false
+	default:
+		return false
+	}
+}
 
-	files, err := os.ReadDir(ConfigDir)
+func readPoolConfigRevision(configPath string) (poolConfigRevision, error) {
+	info, err := os.Stat(configPath)
+	if err != nil {
+		return poolConfigRevision{}, err
+	}
+	return poolConfigRevision{modTimeUnixNano: info.ModTime().UnixNano(), sizeBytes: info.Size()}, nil
+}
+
+func poolRevisionChanged(previous poolConfigRevision, current poolConfigRevision) bool {
+	return previous.modTimeUnixNano != current.modTimeUnixNano || previous.sizeBytes != current.sizeBytes
+}
+
+func startPoolSupervisor(configPath string, revision poolConfigRevision) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	poolsMutex.Lock()
+	activePools[configPath] = poolHandle{
+		cancel:   cancel,
+		done:     done,
+		revision: revision,
+	}
+	poolsMutex.Unlock()
+
+	go launchPoolSupervisor(ctx, configPath, done)
+}
+
+func waitForPoolShutdown(configPath string, done <-chan struct{}, timeout time.Duration) {
+	select {
+	case <-done:
+		return
+	case <-time.After(timeout):
+		log.Printf("Pool %s did not stop within %s after cancellation; continuing reload.", filepath.Base(configPath), timeout)
+	}
+}
+
+// buildWorkerArgs returns FastCGI worker startup args from pool configuration.
+func buildWorkerArgs(conf PoolConfig, listenEndpoint string) []string {
+	args := []string{"--fastcgi.server_port", listenEndpoint, "--config.config_file", conf.ConfigFile, "--global.temp_dir", conf.TmpDir}
+	if globalASADir := strings.TrimSpace(conf.GlobalAsa); globalASADir != "" {
+		args = append(args, "--config.global_asa", globalASADir)
+	}
+	if poolName := strings.TrimSpace(conf.SiteName); poolName != "" {
+		args = append(args, "--pool.name", poolName)
+	}
+	return args
+}
+
+// scanAndLoadConfigs reads the config directory and starts supervisors for new files,
+// while gracefully reloading pools whose config file changed.
+func scanAndLoadConfigs() {
+	files, err := os.ReadDir(configDir)
 	if err != nil {
 		//We use Fatalf here because if we can't read the config directory, we can't proceed.
 		//we also don't want to try to create the directory automatically, as that could lead to unexpected behavior. The user should ensure the directory exists and is readable.
 		log.Fatalf("Failed to read configuration directory: %v\nExiting...", err)
 	}
 
+	newPools := make([]struct {
+		configPath string
+		revision   poolConfigRevision
+	}, 0)
+	restarts := make([]restartAction, 0)
+
+	poolsMutex.Lock()
+
 	for _, file := range files {
 		//Look for .conf files only, ignoring other files or directories.
 		if filepath.Ext(file.Name()) == ".conf" {
-			configPath := filepath.Join(ConfigDir, file.Name())
+			configPath := filepath.Join(configDir, file.Name())
 
-			// Check if this config is already being supervised
-			if _, exists := activePools[configPath]; !exists {
-				log.Printf("❖ New configuration detected: %s. Starting worker pool...", file.Name())
+			revision, revErr := readPoolConfigRevision(configPath)
+			if revErr != nil {
+				log.Printf("Failed to inspect pool config %s: %v", configPath, revErr)
+				continue
+			}
 
-				// Create a cancellable context for this specific worker pool
-				ctx, cancel := context.WithCancel(context.Background())
-				activePools[configPath] = cancel
+			handle, exists := activePools[configPath]
+			if !exists {
+				newPools = append(newPools, struct {
+					configPath string
+					revision   poolConfigRevision
+				}{configPath: configPath, revision: revision})
+				continue
+			}
 
-				go superviseWorker(ctx, configPath)
+			if poolRevisionChanged(handle.revision, revision) {
+				restarts = append(restarts, restartAction{configPath: configPath, previous: handle, revision: revision})
 			}
 		}
+	}
+	poolsMutex.Unlock()
+
+	for _, action := range restarts {
+		log.Printf("❖ Pool configuration updated: %s. Reloading worker pool...", filepath.Base(action.configPath))
+		action.previous.cancel()
+		waitForPoolShutdown(action.configPath, action.previous.done, 15*time.Second)
+		startPoolSupervisor(action.configPath, action.revision)
+	}
+
+	for _, pool := range newPools {
+		log.Printf("❖ New configuration detected: %s. Starting worker pool...", filepath.Base(pool.configPath))
+		startPoolSupervisor(pool.configPath, pool.revision)
 	}
 }
 
 func shutdownAllPools() {
 	poolsMutex.Lock()
-	defer poolsMutex.Unlock()
-
-	for configPath, cancel := range activePools {
-		cancel()
+	handles := make(map[string]poolHandle, len(activePools))
+	for configPath, handle := range activePools {
+		handles[configPath] = handle
 		delete(activePools, configPath)
+	}
+	poolsMutex.Unlock()
+
+	for _, handle := range handles {
+		handle.cancel()
+	}
+	for configPath, handle := range handles {
+		waitForPoolShutdown(configPath, handle.done, 15*time.Second)
 	}
 }
 
-func superviseWorker(ctx context.Context, configPath string) {
+func superviseWorker(ctx context.Context, configPath string, done chan struct{}) {
+	defer close(done)
+
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		log.Printf("Error reading %s: %v", configPath, err)
@@ -231,9 +348,8 @@ func superviseWorker(ctx context.Context, configPath string) {
 	for {
 		log.Printf("[%s] Starting Worker (Attempt: %d) with %dMB of RAM", conf.SiteName, restarts, conf.MemoryLimitMB)
 
-		// Use CommandContext so the process can be killed cleanly if the context is cancelled, we still need to support it in the fastcgi implementation
-
-		cmd := exec.CommandContext(ctx, WorkerExec, "--fastcgi.server_port", listenEndpoint, "--config.config_file", conf.ConfigFile, "--global.temp_dir", conf.TmpDir)
+		args := buildWorkerArgs(conf, listenEndpoint)
+		cmd := exec.Command(WorkerExec, args...)
 
 		cmd.Dir = conf.AppPath
 		log.Printf("[%s] Executing: %s", conf.SiteName, strings.Join(cmd.Args, " "))
@@ -259,10 +375,34 @@ func superviseWorker(ctx context.Context, configPath string) {
 		if err := cmd.Start(); err != nil {
 			log.Printf("[%s] Failed to start worker: %v", conf.SiteName, err)
 		} else {
+			processExited := make(chan struct{})
+			go func(process *os.Process) {
+				select {
+				case <-ctx.Done():
+					if process == nil {
+						return
+					}
+					if signalErr := process.Signal(syscall.SIGTERM); signalErr != nil && !errors.Is(signalErr, os.ErrProcessDone) {
+						log.Printf("[%s] Failed to send SIGTERM to worker: %v", conf.SiteName, signalErr)
+						return
+					}
+
+					select {
+					case <-processExited:
+					case <-time.After(10 * time.Second):
+						if killErr := process.Kill(); killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
+							log.Printf("[%s] Failed to force-kill worker after SIGTERM timeout: %v", conf.SiteName, killErr)
+						}
+					}
+				case <-processExited:
+				}
+			}(cmd.Process)
+
 			if err := enforceCgroupMemoryLimit(conf.SiteName, cmd.Process.Pid, conf.MemoryLimitMB); err != nil {
 				log.Printf("[%s] Warning: Failed to apply cgroup limit: %v", conf.SiteName, err)
 			}
 			err = cmd.Wait()
+			close(processExited)
 			log.Printf("[%s] Worker terminated. Error/Exit State: %v", conf.SiteName, err)
 		}
 

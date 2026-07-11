@@ -35,11 +35,13 @@ Use this mode when you host multiple applications, shared hosting tenants, or an
 Signal behavior:
 
 - `SIGINT` or `SIGTERM`: Stop all pools and shut down the manager and the fastcgi workers.
-- `SIGUSR2` (systemd `reload` action): Rescan pool directory and start supervisors for **new** `.conf` files (alternative to `SIGHUP`).
+- `SIGUSR2` (systemd `reload` action): Rescan pool directory, detect changed `.conf` files, gracefully stop only affected pools, and start them again with updated settings.
+- `SIGHUP`: Trigger the same rescan and selective pool reload behavior.
 
 Important operational detail:
 
-- A `SIGUSR2` (systemd `reload` action) rescan does not reload or stop already active pools. It only adds missing supervisors for newly detected files. In these cases, you must stop and restart the manager to reload pool configuration changes.
+- During selective reload, unmodified pools remain active and uninterrupted.
+- Worker shutdown during reload uses graceful `SIGTERM` first and escalates to force kill only if the process does not exit within the grace window.
 
 ## Pool Configuration Directives
 
@@ -52,6 +54,7 @@ Each pool file in `/opt/axonasp/fpm/fpm.d/` is a TOML document.
 | `gid` | Yes | Integer | Numeric group ID used to run the worker process. |
 | `socket` | Yes | String | FastCGI endpoint passed to `--fastcgi.server_port`. Supports Unix socket paths or TCP endpoints. |
 | `config_file` | Yes | String | Absolute path to the AxonASP TOML config file used by the worker (`--config.config_file`). |
+| `global_asa` | No | String | Optional directory passed to the worker as `--config.global_asa`. Use this to force one explicit `global.asa` boundary per pool. |
 | `app_path` | Yes | String | Worker current directory. Must be an existing directory. |
 | `memory_limit_mb` | Yes | Integer | Memory ceiling in MB. The manager exports memory-related environment variables and attempts cgroup enforcement. |
 | `max_restarts` | Yes | Integer | Maximum restart attempts after crashes. Use `0` for unlimited restarts. |
@@ -77,6 +80,7 @@ uid = 1001
 gid = 1001
 socket = "/var/run/axonasp/example.com.sock"
 config_file = "/opt/axonasp/config/axonasp.toml"
+global_asa = "/opt/axonasp/sites/example.com"
 app_path = "/opt/axonasp/"
 memory_limit_mb = 256
 max_restarts = 5
@@ -159,9 +163,27 @@ sudo kill -TERM <fpm_manager_pid>
 sudo systemctl stop axonasp-fpm
 sudo systemctl start axonasp-fpm
 sudo systemctl restart axonasp-fpm
-sudo systemctl reload axonasp-fpm #Only adds new file supervisors without affecting active pools.
+sudo systemctl reload axonasp-fpm #Reloads only modified pools; keeps unmodified pools running.
 
 ```
+
+## IIS Administrator Translation Guide
+
+If you are migrating from a Windows IIS model, use the mappings below.
+
+| AxonASP Concept | IIS Equivalent | Practical Meaning |
+|---|---|---|
+| One pool `.conf` file in `fpm.d` | One IIS Application Pool | Each pool is an isolated worker boundary for one application context. |
+| `uid` and `gid` in pool config | AppPool Identity | Isolation requires separate pool files with distinct Unix users and groups. |
+| `global_asa` in pool config | Virtual directory application boundary | Defining `global_asa` pins startup events and application scope to one explicit path per pool. |
+| `socket` endpoint per pool | Handler endpoint per app pool | Never share one socket across isolated applications. |
+
+Migration guidance:
+
+- Use one `.conf` file per isolated application, similar to one dedicated IIS Application Pool per site.
+- Use different `uid`/`gid` values to replicate identity isolation between applications.
+- Set `global_asa` explicitly for each pool when multiple applications exist under one server tree.
+- Prefer absolute paths for `config_file`, `global_asa`, `app_path`, and `tmp_dir` in production to avoid path-resolution ambiguity.
 
 ## Memory Control Notes
 
