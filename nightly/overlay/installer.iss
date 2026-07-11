@@ -1,9 +1,14 @@
 #define MyAppName "AxonASP Server"
-#define MyAppVersion "2.3.0"
+; Allow CI to override version and arch suffix via iscc /D flag.
+#ifndef MyAppVersion
+  #define MyAppVersion "2.3.0"
+#endif
 #define MyAppPublisher "G3pix Ltda"
 #define MyAppURL "https://g3pix.com.br/axonasp"
 #define MyAppExeName "axonasp-http.exe"
-#define MyArchSuffix "amd64"
+#ifndef MyArchSuffix
+  #define MyArchSuffix "amd64"
+#endif
 
 [Setup]
 AppId={{0E1F2C1D-3A4B-5C6D-7E8F-901234567890}}

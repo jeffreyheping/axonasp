@@ -241,9 +241,73 @@ jobs:
         if: always()
         run: docker rm -f axonasp-nightly || true
 
+  windows-installer:
+    name: Build Windows Installers
+    needs: sync
+    if: needs.sync.outputs.changed == 'true'
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download patched workspace
+        uses: actions/download-artifact@v4
+        with:
+          name: patched-workspace
+          path: .
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+      - name: Build Windows AMD64 binaries
+        env:
+          FULL_VERSION: ${{ needs.sync.outputs.version }}
+        shell: bash
+        run: |
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-http.exe ./server
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-fastcgi.exe ./fastcgi
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-cli.exe ./cli
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-mcp.exe ./mcp
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-admin.exe ./admin
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-service.exe ./service
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-testsuite.exe ./testsuite
+      - name: Build AMD64 installer
+        env:
+          VERSION: ${{ needs.sync.outputs.version }}
+        shell: bash
+        run: iscc /DMyAppVersion="${VERSION}" /DMyArchSuffix="amd64" installer.iss
+      - name: Clean AMD64 binaries
+        shell: bash
+        run: rm -f axonasp-*.exe
+      - name: Build Windows ARM64 binaries
+        env:
+          FULL_VERSION: ${{ needs.sync.outputs.version }}
+        shell: bash
+        run: |
+          CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-http.exe ./server
+          CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-fastcgi.exe ./fastcgi
+          CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-cli.exe ./cli
+          CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-mcp.exe ./mcp
+          CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-admin.exe ./admin
+          CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-service.exe ./service
+          CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o axonasp-testsuite.exe ./testsuite
+      - name: Build ARM64 installer
+        env:
+          VERSION: ${{ needs.sync.outputs.version }}
+        shell: bash
+        run: iscc /DMyAppVersion="${VERSION}" /DMyArchSuffix="arm64" installer.iss
+      - name: Upload installers as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: axonasp-windows-installers
+          path: Output/*.exe
+
   release:
     name: Publish nightly release
-    needs: [sync, build]
+    needs: [sync, build, windows-installer]
     if: needs.sync.outputs.changed == 'true'
     runs-on: ubuntu-latest
     permissions:
