@@ -46,7 +46,7 @@ type PoolConfig struct {
 	GID           uint32 `toml:"gid"`
 	Socket        string `toml:"socket"`
 	ConfigFile    string `toml:"config_file"`
-	GlobalAsa     string `toml:"global_asa"`
+	GlobalAsa     string `toml:"global_asa_path"`
 	AppPath       string `toml:"app_path"`
 	MemoryLimitMB int    `toml:"memory_limit_mb"`
 	MaxRestarts   int    `toml:"max_restarts"`

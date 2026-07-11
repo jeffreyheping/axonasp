@@ -222,6 +222,7 @@ type FPMPoolConfig struct {
 	GID           uint32 `toml:"gid" comment:"Group ID used to run this worker process. It should match the permissions required by socket/tmp_dir and application files."`
 	Socket        string `toml:"socket" comment:"FastCGI listener endpoint for this pool. You can use a unix socket path, unix:/path form, host:port, or a plain TCP port."`
 	ConfigFile    string `toml:"config_file" comment:"Absolute path to the AxonASP configuration file used by this worker. The FPM supervisor controls the FastCGI endpoint, so fastcgi.server_port inside this file is ignored."`
+	GlobalAsaPath string `toml:"global_asa_path" comment:"Optional directory used to resolve global.asa for this pool. Prefer absolute paths in production to avoid path ambiguity."`
 	AppPath       string `toml:"app_path" comment:"Working directory (CWD) used when launching this worker process. It should point to the AxonASP application root."`
 	MemoryLimitMB int    `toml:"memory_limit_mb" comment:"Per-worker memory limit in MB. The supervisor can restart workers that exceed this value to protect host stability."`
 	MaxRestarts   int    `toml:"max_restarts" comment:"Maximum restart attempts for this worker pool. Set to 0 to disable the cap."`
@@ -440,6 +441,7 @@ func NewDefaultFPMPoolConfig() FPMPoolConfig {
 		GID:           1001,
 		Socket:        "/var/run/axonasp/example.com.sock",
 		ConfigFile:    "/opt/axonasp/config/axonasp.toml",
+		GlobalAsaPath: "/opt/axonasp/www/",
 		AppPath:       "/opt/axonasp/",
 		MemoryLimitMB: 128,
 		MaxRestarts:   3,
