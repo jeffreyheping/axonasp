@@ -609,10 +609,24 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download all build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
+      - name: Download release artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          # List all artifacts for this run, excluding patched-workspace and
+          # docker build artifacts (which are not release assets).
+          ARTIFACTS=$(gh api \
+            "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.name != "patched-workspace" and (.name | test("dockerbuild") | not)) | "\(.name)\t\(.archive_download_url)"')
+          echo "$ARTIFACTS" | while IFS=$'\t' read -r name url; do
+            echo ">>> Downloading $name ..."
+            gh api "$url" > "/tmp/$name.zip"
+            mkdir -p "artifacts/$name"
+            unzip -q -o "/tmp/$name.zip" -d "artifacts/$name"
+            rm -f "/tmp/$name.zip"
+          done
       - name: List release assets
         run: find artifacts -type f | sort
       - name: Publish rolling nightly pre-release
