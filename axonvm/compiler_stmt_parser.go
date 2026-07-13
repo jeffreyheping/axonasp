@@ -368,6 +368,110 @@ func (c *Compiler) parseStatement() {
 			c.parsePutStatement()
 		case vbscript.KeywordGet:
 			c.parseGetStatement()
+		case vbscript.KeywordMe:
+			c.move() // consume 'Me'
+			if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctDot {
+				c.emit(OpMe)
+				c.move() // consume '.'
+				memberName := c.expectIdentifier()
+
+				// Build member chain for multi-level access: Me.Obj.Prop
+				memberChain := []string{memberName}
+				for {
+					if dot, ok := c.next.(*vbscript.PunctuationToken); ok && dot.Type == vbscript.PunctDot {
+						c.move()
+						memberName = c.expectIdentifier()
+						memberChain = append(memberChain, memberName)
+						continue
+					}
+					break
+				}
+
+				flatMemberName := strings.Join(memberChain, ".")
+				callMemberName := flatMemberName
+				if len(memberChain) > 1 {
+					isAssignment := false
+					if peq, ok := c.next.(*vbscript.PunctuationToken); ok && peq.Type == vbscript.PunctEqual {
+						isAssignment = true
+					}
+					if !isAssignment {
+						for i := 0; i < len(memberChain)-1; i++ {
+							intermediateIdx := c.addConstant(NewString(memberChain[i]))
+							c.emit(OpConstant, intermediateIdx)
+							c.emit(OpMemberGet)
+						}
+						callMemberName = memberChain[len(memberChain)-1]
+					}
+				}
+
+				// Property assignment: Me.Prop = value
+				if peq, ok := c.next.(*vbscript.PunctuationToken); ok && peq.Type == vbscript.PunctEqual {
+					setMemberName := flatMemberName
+					if len(memberChain) > 1 {
+						for i := 0; i < len(memberChain)-1; i++ {
+							intermediateIdx := c.addConstant(NewString(memberChain[i]))
+							c.emit(OpConstant, intermediateIdx)
+							c.emit(OpMemberGet)
+						}
+						setMemberName = memberChain[len(memberChain)-1]
+					}
+					c.move() // Consume '='
+					c.parseExpression(PrecNone)
+					midx := c.addConstant(NewString(setMemberName))
+					c.emit(OpMemberSet, midx)
+				} else if lp, ok := c.next.(*vbscript.PunctuationToken); ok && lp.Type == vbscript.PunctLParen {
+					// Me.Method(args) or Me.Arr(index) or Me.Arr(index) = value
+					argCount := c.parseParenArgumentList()
+					midx := c.addConstant(NewString(callMemberName))
+					if peq, ok2 := c.next.(*vbscript.PunctuationToken); ok2 && peq.Type == vbscript.PunctEqual {
+						// Me.Arr(index) = value (array write)
+						c.move() // Consume '='
+						c.parseExpression(PrecNone)
+						c.emit(OpArraySet, midx, argCount)
+					} else if dot, ok2 := c.next.(*vbscript.PunctuationToken); ok2 && dot.Type == vbscript.PunctDot {
+						// Chained: Me.Method(args).Prop
+						c.emit(OpCallMember, midx, argCount)
+						if c.parseStatementCallChain() {
+							return
+						}
+						c.emit(OpPop)
+					} else {
+						c.emit(OpCallMember, midx, argCount)
+						c.emit(OpPop)
+					}
+				} else {
+					// Me.Prop arg1, arg2 (sub call without parens)
+					argCount := 0
+					if !c.isStatementEnd() {
+						for {
+							if comma, ok := c.next.(*vbscript.PunctuationToken); ok && comma.Type == vbscript.PunctComma {
+								emptyIdx := c.addConstant(NewEmpty())
+								c.emit(OpConstant, emptyIdx)
+							} else if c.isStatementEnd() {
+								emptyIdx := c.addConstant(NewEmpty())
+								c.emit(OpConstant, emptyIdx)
+							} else {
+								mscArgStartPos := len(c.bytecode)
+								c.parseExpression(PrecNone)
+								c.patchArgRefInBytecode(mscArgStartPos)
+							}
+							argCount++
+							if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctComma {
+								c.move()
+							} else {
+								break
+							}
+						}
+					}
+					midx := c.addConstant(NewString(callMemberName))
+					c.emit(OpCallMember, midx, argCount)
+					c.emit(OpPop)
+				}
+				return
+			}
+			// Not followed by '.' — fallback to expression parsing
+			c.parseExpression(PrecNone)
+			c.emit(OpPop)
 		default:
 			c.parseExpression(PrecNone)
 			c.emit(OpPop)

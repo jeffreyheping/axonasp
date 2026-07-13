@@ -4091,7 +4091,9 @@ aspExecLoop:
 				callArgs = append(callArgs, value)
 				_ = vm.dispatchNativeCall(target.Num, vm.constants[memberIdx].Str, callArgs)
 			} else if target.Type == VTObject {
-				// Indexed default Property Let: obj(idx...) = value → call property Let.
+				// Indexed access: obj.member(idx...) = value
+				// First try Property Set with (index, value) arguments.
+				requirePublic := target.Num != vm.activeClassObjectID
 				memberName := vm.constants[memberIdx].Str
 				if memberName == "" {
 					memberName = "__default__"
@@ -4100,9 +4102,20 @@ aspExecLoop:
 				letArgs := vm.ensureCombineBuffer(letArgCount)[:0]
 				letArgs = append(letArgs, indexes...)
 				letArgs = append(letArgs, value)
-				propertyTarget, ok := vm.resolveRuntimeClassPropertySet(target, memberName, letArgCount, false, false, true)
+				propertyTarget, ok := vm.resolveRuntimeClassPropertySet(target, memberName, letArgCount, false, false, requirePublic)
 				if ok {
 					if vm.beginUserSubCall(propertyTarget, letArgs, true, target.Num) {
+						continue
+					}
+				}
+				// If no Property Set exists, try to resolve as a field and
+				// assign to an array element (e.g. obj.Arr(0) = val).
+				if fieldValue, ok := vm.resolveRuntimeClassField(target, memberName, requirePublic); ok {
+					if fieldValue.Type == VTArray {
+						vm.assignArrayElement(fieldValue, indexes, value)
+						// Write the modified array back to the field so the
+						// change is visible through the class member.
+						vm.assignRuntimeClassField(target, memberName, fieldValue, requirePublic)
 						continue
 					}
 				}

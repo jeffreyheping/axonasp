@@ -7,7 +7,7 @@ Your task is to take raw commit messages, feature descriptions, and bug fixes, a
 You must strictly adhere to the following Markdown structure and rules for every release note:
 
 1. **Title:** Format: `## AxonASP v[Version]: [Comma-separated list of 2-3 major highlights]`
-   *Example:* `## AxonASP v2.2.9: AxonAdmin Web Interface, Custom Config Paths, and Critical Execution Fixes`
+   *Example:* `## AxonASP v2.3.3: AxonAdmin Web Interface, Custom Config Paths, and Critical Execution Fixes`
 
 2. **Introduction:** Write a single, engaging paragraph (1-2 sentences max) summarizing the overarching theme and value of the release.
 
@@ -27,17 +27,18 @@ Example of the "Downloads & Installation" section that you must follow exactly:
 
       #### 🪟 Windows Installer
       For a straightforward installation on Windows, we highly recommend using the automated installer. This package standardizes setup via Inno Setup:
-      * 🚀 **[Download AxonASP v2.3.3 Windows Installer (x64)](https://github.com/guimaraeslucas/axonasp/releases/download/v2.3.3/YOUR_ASSET_URL_HERE)**
+      * 🚀 **[Download AxonASP v2.3.3 Windows Installer (x64)](https://github.com/guimaraeslucas/axonasp/releases/download/v2.3.3/axonasp_installer_2.3.3_amd64.exe)**
 
       #### 📦 Cross-Platform Packages
-      If you prefer portable binaries or are deploying on Unix environments, choose the appropriate package from the table below:
-
       | OS / Platform | Architecture | Package Type | Download Link |
       | :--- | :--- | :--- | :--- |
-      | **Windows** | x64 / x86 | Portable Zip | [Download](https://github.com/guimaraeslucas/axonasp/releases/download/v2.3.3/YOUR_ASSET_URL_HERE) |
-      | **macOS** | Apple Silicon | Package (`.pkg`) | [Download](https://github.com/guimaraeslucas/axonasp/releases/download/v2.3.3/YOUR_ASSET_URL_HERE) |
-      | **Linux Debian ** | x64 | Deb Package (`.deb`) | [Download](https://github.com/guimaraeslucas/axonasp/releases/download/v2.3.3/YOUR_ASSET_URL_HERE) |
-      | **BSD ** | x64| Tarball (`.tar.gz`) | [Download](https://github.com/guimaraeslucas/axonasp/releases/download/v2.3.3/YOUR_ASSET_URL_HERE) |
+      | **Windows** | x64 / x86 | Portable Zip | [Download](https://github.com/guimaraeslucas/axonasp/releases/download/v2.3.3/axonasp-windows-2.3.3-amd64.zip) |
+      | **macOS** | Apple Silicon | Package (`.pkg`) | [Download](https://github.com/guimaraeslucas/axonasp/releases/download/v2.3.3/axonasp-macos-2.3.3-arm64.pkg) |
+      | **Linux Debian ** | x64 | Deb Package (`.deb`) | [Download](https://github.com/guimaraeslucas/axonasp/releases/download/v2.3.3/axonasp_2.3.3_amd64.deb) |
+      | **FreeBSD** | x64| Tarball (`.tar.gz`) | [Download](https://github.com/guimaraeslucas/axonasp/releases/download/v2.3.3/axonasp-freebsd-2.3.3-amd64.tar.gz) |
+
+      If you prefer the portable binaries or are deploying on other environments like BSD or want the WASM, choose the appropriate package from the assets below
+
    ```
 
 4. **Bullet Point Style:**

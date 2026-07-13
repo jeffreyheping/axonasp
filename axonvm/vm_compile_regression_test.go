@@ -9569,3 +9569,478 @@ func TestASPSpecificationViolationsFixes(t *testing.T) {
 		t.Fatalf("expected %q, got %q", expected, got)
 	}
 }
+
+// TestASPMeLetArrayAssignmentAndIndexing verifies that assigning an array to a
+// class member via Me.Arr = Array(...) and reading elements via Me.Arr(0) works
+// correctly. This is the core of the Variant array backward-compatibility fix.
+func TestASPMeLetArrayAssignmentAndIndexing(t *testing.T) {
+	source := `<%
+Class Foo
+    Public Arr
+
+    Public Function Test()
+        ' Issue 1: Assignment via Me.Arr must store the array (was silently failing)
+        Me.Arr = Array(1, 2, 3)
+
+        ' Verify array was actually stored (TypeName check)
+        Response.Write TypeName(Me.Arr) & "|"
+
+        ' Issue 2: Indexing via Me.Arr(0) must read the element
+        Response.Write CStr(Me.Arr(0)) & "|"
+        Response.Write CStr(Me.Arr(1)) & "|"
+        Response.Write CStr(Me.Arr(2)) & "|"
+    End Function
+End Class
+
+Dim f
+Set f = New Foo
+f.Test()
+%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	got := output.String()
+	// Expected: "Variant()|1|2|3|"
+	if got != "Variant()|1|2|3|" {
+		t.Fatalf("expected 'Variant()|1|2|3|', got %q", got)
+	}
+}
+
+// TestASPMeArrayIndexWrite verifies writing to an array element through Me: Me.Arr(0) = "x"
+func TestASPMeArrayIndexWrite(t *testing.T) {
+	source := `<%
+Class Foo
+    Public Arr
+
+    Public Function Test()
+        Me.Arr = Array(10, 20, 30)
+
+        ' Write via Me.Arr(index) = value
+        Me.Arr(0) = 100
+        Me.Arr(2) = 300
+
+        ' Read back
+        Response.Write CStr(Me.Arr(0)) & "|"
+        Response.Write CStr(Me.Arr(1)) & "|"
+        Response.Write CStr(Me.Arr(2)) & "|"
+    End Function
+End Class
+
+Dim f
+Set f = New Foo
+f.Test()
+%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	got := output.String()
+	if got != "100|20|300|" {
+		t.Fatalf("expected '100|20|300|', got %q", got)
+	}
+}
+
+// TestASPMeArrayAccessViaExternalReference verifies reading/writing array
+// elements through an external object reference (obj.Arr(0)).
+func TestASPMeArrayAccessViaExternalReference(t *testing.T) {
+	source := `<%
+Class Container
+    Public Skills
+
+    Private Sub Class_Initialize()
+        Skills = Array("VBScript", "Go", "ASP")
+    End Sub
+End Class
+
+Dim obj
+Set obj = New Container
+
+' Read through external reference
+Response.Write CStr(obj.Skills(0)) & "|"
+Response.Write CStr(obj.Skills(1)) & "|"
+Response.Write CStr(obj.Skills(2)) & "|"
+
+' Write through external reference
+obj.Skills(0) = "JavaScript"
+Response.Write CStr(obj.Skills(0)) & "|"
+%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	got := output.String()
+	if got != "VBScript|Go|ASP|JavaScript|" {
+		t.Fatalf("expected 'VBScript|Go|ASP|JavaScript|', got %q", got)
+	}
+}
+
+// TestASPMeArrayDeepCopyPattern verifies the deep-copy pattern where array
+// elements are read from a class member and assigned to another array.
+func TestASPMeArrayDeepCopyPattern(t *testing.T) {
+	source := `<%
+Class DataHolder
+    Public Items
+
+    Private Sub Class_Initialize()
+        Items = Array("A", "B", "C")
+    End Sub
+
+    Public Function CopyTo(ByRef target)
+        Dim i
+        For i = 0 To UBound(Items)
+            target(i) = Me.Items(i)
+        Next
+    End Function
+End Class
+
+Dim dh, result, i
+Set dh = New DataHolder
+result = Array("", "", "")
+dh.CopyTo result
+
+For i = 0 To 2
+    Response.Write result(i) & "|"
+Next
+%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	got := output.String()
+	if got != "A|B|C|" {
+		t.Fatalf("expected 'A|B|C|', got %q", got)
+	}
+}
+
+// TestASPMeMultipleArrayFields verifies that having multiple array fields
+// accessed via Me works independently.
+func TestASPMeMultipleArrayFields(t *testing.T) {
+	source := `<%
+Class Multi
+    Public Names
+    Public Values
+
+    Private Sub Class_Initialize()
+        Names = Array("x", "y")
+        Values = Array(10, 20)
+    End Sub
+
+    Public Function Dump()
+        Me.Names(0) = "a"
+        Me.Values(1) = 99
+        Response.Write CStr(Me.Names(0)) & "|"
+        Response.Write CStr(Me.Names(1)) & "|"
+        Response.Write CStr(Me.Values(0)) & "|"
+        Response.Write CStr(Me.Values(1)) & "|"
+    End Function
+End Class
+
+Dim m
+Set m = New Multi
+m.Dump()
+%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	got := output.String()
+	if got != "a|y|10|99|" {
+		t.Fatalf("expected 'a|y|10|99|', got %q", got)
+	}
+}
+
+// TestASPMeScalarPropertyAssignment ensures that non-array Me.Property = value
+// assignments still work (regression check for the Me. statement-level fix).
+func TestASPMeScalarPropertyAssignment(t *testing.T) {
+	source := `<%
+Class Person
+    Public Name
+    Public Age
+
+    Public Function Init()
+        Me.Name = "Alice"
+        Me.Age = 30
+    End Function
+
+    Public Function Display()
+        Response.Write Me.Name & "|"
+        Response.Write CStr(Me.Age) & "|"
+    End Function
+End Class
+
+Dim p
+Set p = New Person
+p.Init()
+p.Display()
+%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	got := output.String()
+	if got != "Alice|30|" {
+		t.Fatalf("expected 'Alice|30|', got %q", got)
+	}
+}
+
+// TestASPMeMethodCall ensures that Me.Method() and Me.Method arg still work
+// correctly after the Me. statement handling changes.
+func TestASPMeMethodCall(t *testing.T) {
+	source := `<%
+Class Helper
+    Public Function GetVal()
+        GetVal = 42
+    End Function
+
+    Public Function Test()
+        ' Me.Method() with parenthesized call
+        Dim result
+        result = Me.GetVal()
+        Response.Write CStr(result) & "|"
+
+        ' Me.Method arg (statement call without parens) - verified via sub
+        Me.DoSomething "hello"
+    End Function
+
+    Public Sub DoSomething(ByVal msg)
+        Response.Write msg & "|"
+    End Sub
+End Class
+
+Dim h
+Set h = New Helper
+Response.Write CStr(h.Test()) & "|"
+%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	got := output.String()
+	if got != "42|hello||" {
+		t.Fatalf("expected '42|hello||', got %q", got)
+	}
+}
+
+// TestASPMeMethodCallReturnValue verifies that Me.Method() used as expression
+// argument with a function that returns a value works correctly.
+func TestASPMeMethodCallReturnValue(t *testing.T) {
+	source := `<%
+Class Calc
+    Public Function Double(x)
+        Double = x * 2
+    End Function
+
+    Public Function Test()
+        Test = Me.Double(21)
+    End Function
+End Class
+
+Dim c
+Set c = New Calc
+Response.Write CStr(c.Test())
+%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	got := output.String()
+	if got != "42" {
+		t.Fatalf("expected '42', got %q", got)
+	}
+}
+
+// TestASPMeArrayAssignmentAndTypeName verifies that after Me.Arr = Array(...),
+// TypeName returns "Variant()" confirming the array is properly stored.
+func TestASPMeArrayAssignmentAndTypeName(t *testing.T) {
+	source := `<%
+Class Foo
+    Public Arr
+
+    Public Function Test()
+        ' Direct assignment (without Me) - should work as before
+        Arr = Array(10, 20)
+        Response.Write TypeName(Arr) & "|"
+
+        ' Assignment via Me - this was the bug
+        Me.Arr = Array(1, 2, 3)
+        Response.Write TypeName(Me.Arr) & "|"
+
+        ' Index reading after Me assignment
+        Response.Write CStr(Me.Arr(0)) & "|"
+        Response.Write CStr(Me.Arr(1)) & "|"
+        Response.Write CStr(Me.Arr(2)) & "|"
+    End Function
+End Class
+
+Dim f
+Set f = New Foo
+f.Test()
+%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	got := output.String()
+	if got != "Variant()|Variant()|1|2|3|" {
+		t.Fatalf("expected 'Variant()|Variant()|1|2|3|', got %q", got)
+	}
+}
+
+// TestASPMeMethodCallInExpression verifies that Me.Method() used as an
+// expression argument (e.g., Response.Write Me.GetVal()) still works.
+func TestASPMeMethodCallInExpression(t *testing.T) {
+	source := `<%
+Class Calc
+    Public Function GetVal()
+        GetVal = 99
+    End Function
+
+    Public Function Test()
+        Response.Write "val=" & Me.GetVal()
+    End Function
+End Class
+
+Dim c
+Set c = New Calc
+c.Test()
+%>`
+
+	compiler := NewASPCompiler(source)
+	if err := compiler.Compile(); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	vm := NewVM(compiler.Bytecode(), compiler.Constants(), compiler.GlobalsCount())
+	host := NewMockHost()
+	var output bytes.Buffer
+	host.SetOutput(&output)
+	vm.SetHost(host)
+
+	if err := vm.Run(); err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	host.Response().Flush()
+
+	got := output.String()
+	if got != "val=99" {
+		t.Fatalf("expected 'val=99', got %q", got)
+	}
+}
