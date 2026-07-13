@@ -2249,7 +2249,12 @@ func (c *Compiler) parseConstStatement() {
 // parseEnumStatement compiles Enum declarations as compile-time constants.
 func (c *Compiler) parseEnumStatement() {
 	c.expectKeyword(vbscript.KeywordEnum)
-	_ = c.expectIdentifier() // Enum name (ignored at runtime)
+	enumName := c.expectIdentifier() // Enum type name
+	enumLower := strings.ToLower(enumName)
+	// Create entry for this enum type in the lookup table.
+	if _, exists := c.enumTypeLookup[enumLower]; !exists {
+		c.enumTypeLookup[enumLower] = make(map[string]Value)
+	}
 	c.skipStatementEnd()
 
 	var currentValue int64 = 0
@@ -2294,8 +2299,11 @@ func (c *Compiler) parseEnumStatement() {
 			}
 		}
 
+		// Register the bare member name as a global constant (e.g., "Green").
 		c.constGlobals[lower] = true
 		c.constLiteralGlobals[lower] = NewInteger(currentValue)
+		// Also register under the enum type name prefix for EnumType.Member resolution.
+		c.enumTypeLookup[enumLower][lower] = NewInteger(currentValue)
 		currentValue++
 
 		c.skipStatementEnd()
@@ -2408,6 +2416,10 @@ func (c *Compiler) parseAsTypeClause() (ValueType, string) {
 	// Check if it's a UDT
 	if _, exists := c.recordDeclLookup[strings.ToLower(typeName)]; exists {
 		return VTRecord, typeName
+	}
+	// Check if it's an Enum type — Enum values are integers at runtime.
+	if _, exists := c.enumTypeLookup[strings.ToLower(typeName)]; exists {
+		return VTInteger, typeName
 	}
 	// Phase 5: Support Classes/Interfaces in As clause.
 	// Since we are single-pass, we might not have all classes declared yet.

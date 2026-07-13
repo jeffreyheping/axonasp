@@ -97,6 +97,15 @@ func (c *Compiler) emitIdentifierValue(name string) {
 		}
 	}
 
+	// If the identifier is an Enum type name followed by '.', skip the
+	// StaticObjects fallback so that the PunctDot infix handler can resolve
+	// EnumType.Member as a compile-time integer constant.
+	if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctDot {
+		if _, isEnum := c.enumTypeLookup[strings.ToLower(strings.TrimSpace(trimmedName))]; isEnum {
+			goto resolveIdentifierNormally
+		}
+	}
+
 	if p, ok := c.next.(*vbscript.PunctuationToken); !(ok && p.Type == vbscript.PunctLParen) {
 		if c.emitStaticObjectIdentifierFallback(trimmedName) {
 			return
@@ -771,10 +780,48 @@ func (c *Compiler) getInfixRule(token vbscript.Token) func(*Compiler, vbscript.T
 		switch t.Type {
 		case vbscript.PunctDot:
 			return func(c *Compiler, tk vbscript.Token) {
+				// Save the last call target name/position before clearing —
+				// needed for EnumType.Member resolution.
+				savedCallTargetName := c.lastCallTargetName
+				savedCallTargetPos := c.lastCallTargetPos
+				savedLastCoercePos := c.lastCoercePos
 				c.undoTrailingCoerce() // member access needs raw object reference
 				c.emitAutoCallForBareGlobalBeforeMemberAccess()
 				c.clearLastCallTarget()
 				name := c.expectIdentifier()
+
+				// Check if the prefix expression is an Enum type name.
+				// If so, resolve EnumType.Member as a compile-time integer constant.
+				if savedCallTargetName != "" {
+					enumLower := strings.ToLower(strings.TrimSpace(savedCallTargetName))
+					if members, ok := c.enumTypeLookup[enumLower]; ok {
+						memberLower := strings.ToLower(name)
+						if memberVal, ok := members[memberLower]; ok {
+							// Undo the emitted bytecode for the enum type name identifier
+							// (either OpGetGlobal 3 bytes, or OpConstant 3 bytes, possibly
+							// followed by OpCoerceToValue). Truncate back to the position
+							// before the prefix was emitted, then emit just the member constant.
+							truncatePos := savedCallTargetPos
+							if truncatePos < 0 {
+								truncatePos = 0
+							}
+							// If emitAutoCallForBareGlobalBeforeMemberAccess emitted
+							// OpCoerceToValue, remove that extra byte too.
+							if savedLastCoercePos == len(c.bytecode)-1 && savedLastCoercePos >= 0 {
+								c.bytecode = c.bytecode[:savedLastCoercePos]
+							}
+							if truncatePos < len(c.bytecode) {
+								c.bytecode = c.bytecode[:truncatePos]
+							}
+							constIdx := c.addConstant(memberVal)
+							c.emit(OpConstant, constIdx)
+							c.updateLastEmittedType(VTInteger, "")
+							c.emitTrailingCoerceIfValueContext()
+							return
+						}
+					}
+				}
+
 				// If followed by '(', compile as a direct member call (OpCallMember).
 				// This avoids the OpMemberGet+OpCall pattern that breaks zero-arg
 				// getter calls and multi-arg collections (e.g. Cookies("k","Domain")).

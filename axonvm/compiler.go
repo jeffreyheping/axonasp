@@ -237,6 +237,7 @@ type Compiler struct {
 	classDeclLookup     map[string]int
 	recordDecls         []CompiledRecordDecl
 	recordDeclLookup    map[string]int
+	enumTypeLookup      map[string]map[string]Value // Enum type name -> member name -> constant value
 	ObjectDeclarations  []*vbscript.ASPObjectToken
 	currentClassName    string
 	currentFunctionName string
@@ -711,6 +712,7 @@ func createCompiler(code string, mode vbscript.LexerMode) *Compiler {
 		classDeclLookup:        make(map[string]int),
 		recordDecls:            make([]CompiledRecordDecl, 0),
 		recordDeclLookup:       make(map[string]int),
+		enumTypeLookup:         make(map[string]map[string]Value),
 		loopContexts:           make([]loopContext, 0),
 		jsStrictMode:           false,
 		jsFunctionStrictModes:  make(map[int]bool),
