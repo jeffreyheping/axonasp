@@ -801,10 +801,7 @@ func (c *Compiler) getInfixRule(token vbscript.Token) func(*Compiler, vbscript.T
 							// (either OpGetGlobal 3 bytes, or OpConstant 3 bytes, possibly
 							// followed by OpCoerceToValue). Truncate back to the position
 							// before the prefix was emitted, then emit just the member constant.
-							truncatePos := savedCallTargetPos
-							if truncatePos < 0 {
-								truncatePos = 0
-							}
+							truncatePos := max(savedCallTargetPos, 0)
 							// If emitAutoCallForBareGlobalBeforeMemberAccess emitted
 							// OpCoerceToValue, remove that extra byte too.
 							if savedLastCoercePos == len(c.bytecode)-1 && savedLastCoercePos >= 0 {
