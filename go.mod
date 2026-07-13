@@ -25,7 +25,6 @@ require (
 	github.com/lib/pq v1.12.3
 	github.com/mark3labs/mcp-go v0.56.0
 	github.com/pelletier/go-toml/v2 v2.4.3
-	github.com/ricochet2200/go-disk-usage/du v0.0.0-20210707232629-ac9918953285
 	github.com/rivo/tview v0.42.0
 	github.com/shirou/gopsutil/v3 v3.24.5
 	github.com/sijms/go-ora/v2 v2.9.0
