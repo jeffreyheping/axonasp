@@ -40,19 +40,6 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-type PoolConfig struct {
-	SiteName      string `toml:"site_name"`
-	UID           uint32 `toml:"uid"`
-	GID           uint32 `toml:"gid"`
-	Socket        string `toml:"socket"`
-	ConfigFile    string `toml:"config_file"`
-	GlobalAsa     string `toml:"global_asa_path"`
-	AppPath       string `toml:"app_path"`
-	MemoryLimitMB int    `toml:"memory_limit_mb"`
-	MaxRestarts   int    `toml:"max_restarts"`
-	TmpDir        string `toml:"tmp_dir"`
-}
-
 const (
 	ConfigDir  = "/opt/axonasp/fpm/fpm.d/"
 	WorkerExec = "/opt/axonasp/axonasp-fastcgi"
@@ -85,30 +72,6 @@ var (
 		superviseWorker(ctx, configPath, done)
 	}
 )
-
-// normalizePoolSocketEndpoint normalizes pool socket configuration and returns
-// the FastCGI listen endpoint plus a filesystem path when using unix sockets.
-func normalizePoolSocketEndpoint(raw string) (listenEndpoint string, socketPath string, isUnix bool, err error) {
-	value := strings.TrimSpace(raw)
-	if value == "" {
-		return "", "", false, fmt.Errorf("socket is required in pool config")
-	}
-
-	lower := strings.ToLower(value)
-	if strings.HasPrefix(lower, "unix:") {
-		path := strings.TrimSpace(value[len("unix:"):])
-		if path == "" {
-			return "", "", false, fmt.Errorf("unix socket path cannot be empty")
-		}
-		return "unix:" + path, path, true, nil
-	}
-
-	if strings.HasPrefix(value, "/") || strings.HasPrefix(value, "./") || strings.HasPrefix(value, "../") {
-		return "unix:" + value, value, true, nil
-	}
-
-	return value, "", false, nil
-}
 
 func main() {
 	//Require root privileges to run the FPM manager, as it needs to manage worker processes and potentially bind to privileged ports or create sockets in system directories.
@@ -190,18 +153,6 @@ func waitForPoolShutdown(configPath string, done <-chan struct{}, timeout time.D
 	case <-time.After(timeout):
 		log.Printf("Pool %s did not stop within %s after cancellation; continuing reload.", filepath.Base(configPath), timeout)
 	}
-}
-
-// buildWorkerArgs returns FastCGI worker startup args from pool configuration.
-func buildWorkerArgs(conf PoolConfig, listenEndpoint string) []string {
-	args := []string{"--fastcgi.server_port", listenEndpoint, "--config.config_file", conf.ConfigFile, "--global.temp_dir", conf.TmpDir}
-	if globalASADir := strings.TrimSpace(conf.GlobalAsa); globalASADir != "" {
-		args = append(args, "--config.global_asa", globalASADir)
-	}
-	if poolName := strings.TrimSpace(conf.SiteName); poolName != "" {
-		args = append(args, "--pool.name", poolName)
-	}
-	return args
 }
 
 // scanAndLoadConfigs reads the config directory and starts supervisors for new files,

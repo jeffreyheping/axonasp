@@ -134,6 +134,9 @@ func loadFastCGIConfig() {
 	if pflag.Lookup("pool.name") == nil {
 		pflag.String("pool.name", "", "Optional pool name used for worker log identification")
 	}
+	if pflag.Lookup("server.web_root") == nil {
+		pflag.String("server.web_root", "", "Web root directory (overrides server.web_root from configuration file). When set via CLI by the FPM supervisor, this takes precedence over the TOML value.")
+	}
 	if pflag.Lookup("about") == nil {
 		pflag.BoolVarP(&aboutFlag, "about", "a", false, "Print AxonASP product and licensing information, then exit.")
 	}
