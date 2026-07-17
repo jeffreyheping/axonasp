@@ -410,6 +410,40 @@ func enforceCgroupMemoryLimit(siteName string, pid int, memoryLimitMB int) error
 // ensureMemoryControllerDelegated verifies memory controller availability and
 // tries to enable it for child cgroups if not already active.
 func ensureMemoryControllerDelegated(cgroupBase string) error {
+	// In cgroup v2, child cgroups are created by simply making a directory
+	// under the parent cgroup. Ensure the base cgroup exists before reading
+	// its control files. If the directory doesn't exist yet, we bootstrap it:
+	// check the root cgroup for memory controller availability, enable it
+	// in root's subtree_control if needed, then create the base cgroup.
+	if _, statErr := os.Stat(cgroupBase); os.IsNotExist(statErr) {
+		rootCgroup := "/sys/fs/cgroup"
+		rootControllers, err := os.ReadFile(filepath.Join(rootCgroup, "cgroup.controllers"))
+		if err != nil {
+			return fmt.Errorf("failed to read root cgroup controllers (cgroup v2 may not be mounted): %w", err)
+		}
+		if !hasController(string(rootControllers), "memory") {
+			return fmt.Errorf("memory controller is not available in cgroup v2 hierarchy")
+		}
+		// Ensure memory is delegated to child cgroups from the root
+		rootSubtree := filepath.Join(rootCgroup, "cgroup.subtree_control")
+		rootSubtreeData, err := os.ReadFile(rootSubtree)
+		if err != nil {
+			return fmt.Errorf("failed to read root cgroup.subtree_control: %w", err)
+		}
+		if !hasController(string(rootSubtreeData), "memory") {
+			if err := writeCgroupControl(rootSubtree, "+memory"); err != nil {
+				if isPermissionErr(err) {
+					return fmt.Errorf("memory controller not delegated for child cgroups: %w (container runtime must enable memory cgroup delegation)", err)
+				}
+				return fmt.Errorf("failed to enable memory controller in root cgroup.subtree_control: %w", err)
+			}
+		}
+		// Create the base cgroup directory (kernel populates control files)
+		if err := os.MkdirAll(cgroupBase, 0755); err != nil {
+			return fmt.Errorf("failed to create cgroup directory %s: %w", cgroupBase, err)
+		}
+	}
+
 	controllersData, err := os.ReadFile(filepath.Join(cgroupBase, "cgroup.controllers"))
 	if err != nil {
 		if isPermissionErr(err) {
@@ -420,7 +454,30 @@ func ensureMemoryControllerDelegated(cgroupBase string) error {
 
 	controllers := string(controllersData)
 	if !hasController(controllers, "memory") {
-		return fmt.Errorf("memory controller is not available in %s/cgroup.controllers", cgroupBase)
+		// Memory not available yet — the parent may not have it delegated.
+		// Try to enable from the parent cgroup.
+		parent := filepath.Dir(cgroupBase)
+		parentSubtree := filepath.Join(parent, "cgroup.subtree_control")
+		parentSubtreeData, err := os.ReadFile(parentSubtree)
+		if err != nil {
+			return fmt.Errorf("memory controller is not available in %s and cannot read parent subtree_control: %w", cgroupBase, err)
+		}
+		if !hasController(string(parentSubtreeData), "memory") {
+			if err := writeCgroupControl(parentSubtree, "+memory"); err != nil {
+				if isPermissionErr(err) {
+					return fmt.Errorf("memory controller not delegated for child cgroups in %s: %w (set Delegate=yes in the service unit and enable +memory in cgroup.subtree_control)", cgroupBase, err)
+				}
+				return fmt.Errorf("failed to enable memory controller in parent cgroup.subtree_control: %w", err)
+			}
+		}
+		// Re-read controllers after enabling memory in parent
+		controllersData, err = os.ReadFile(filepath.Join(cgroupBase, "cgroup.controllers"))
+		if err != nil {
+			return fmt.Errorf("failed to re-read cgroup controllers after enabling memory: %w", err)
+		}
+		if !hasController(string(controllersData), "memory") {
+			return fmt.Errorf("memory controller still not available in %s after enabling in parent subtree_control", cgroupBase)
+		}
 	}
 
 	subtreePath := filepath.Join(cgroupBase, "cgroup.subtree_control")
