@@ -1240,6 +1240,23 @@ func (c *Compiler) parseClassDeclaration() {
 			continue
 		}
 
+		hasDispIdMinus4 := false
+		if t, ok := c.next.(*vbscript.IdentifierToken); ok && strings.EqualFold(t.Name, "DispId(-4)") {
+			c.move()
+			hasDispIdMinus4 = true
+			for {
+				if _, ok := c.next.(*vbscript.LineTerminationToken); ok {
+					c.move()
+				} else if _, ok := c.next.(*vbscript.ColonLineTerminationToken); ok {
+					c.move()
+				} else if _, ok := c.next.(*vbscript.CommentToken); ok {
+					c.move()
+				} else {
+					break
+				}
+			}
+		}
+
 		isPublic := true
 		if c.checkKeyword(vbscript.KeywordPublic) {
 			c.move()
@@ -1256,24 +1273,28 @@ func (c *Compiler) parseClassDeclaration() {
 		}
 
 		if c.matchKeywordOrIdentifier(vbscript.KeywordSub, "sub") {
-			c.parseClassMethodDeclaration(className, false, isPublic, isDefaultMember)
+			c.parseClassMethodDeclaration(className, false, isPublic, isDefaultMember, hasDispIdMinus4)
 			continue
 		}
 		if c.checkKeyword(vbscript.KeywordDim) {
 			if isDefaultMember {
 				panic(c.vbCompileError(vbscript.ExpectedSub, "Default member must be a Sub, Function, or Property"))
 			}
+			if hasDispIdMinus4 {
+				panic(c.vbCompileError(vbscript.SyntaxError, "DispId(-4) is only supported on Properties or Functions/Subs"))
+			}
 			c.parseClassFieldDeclaration(className, true)
 			continue
 		}
 		if c.matchKeywordOrIdentifier(vbscript.KeywordFunction, "function") {
-			c.parseClassMethodDeclaration(className, true, isPublic, isDefaultMember)
+			c.parseClassMethodDeclaration(className, true, isPublic, isDefaultMember, hasDispIdMinus4)
 			continue
 		}
 		if c.matchKeywordOrIdentifier(vbscript.KeywordProperty, "property") {
-			c.parseClassPropertyDeclaration(className, isPublic, isDefaultMember)
+			c.parseClassPropertyDeclaration(className, isPublic, isDefaultMember, hasDispIdMinus4)
 			continue
 		}
+
 		if c.matchKeywordOrIdentifier(vbscript.KeywordEvent, "event") {
 			if isDefaultMember {
 				panic(c.vbCompileError(vbscript.ExpectedSub, "Events cannot be the default member of a class"))
@@ -1751,7 +1772,7 @@ func (c *Compiler) extractDefaultConst() int {
 }
 
 // parseClassMethodDeclaration compiles one class Sub/Function body and registers runtime class method metadata.
-func (c *Compiler) parseClassMethodDeclaration(className string, isFunc bool, isPublic bool, isDefaultMember bool) {
+func (c *Compiler) parseClassMethodDeclaration(className string, isFunc bool, isPublic bool, isDefaultMember bool, hasDispIdMinus4 bool) {
 	if isFunc {
 		if c.matchKeywordOrIdentifier(vbscript.KeywordFunction, "function") {
 			c.move()
@@ -1911,6 +1932,10 @@ func (c *Compiler) parseClassMethodDeclaration(className string, isFunc bool, is
 		defaultNameIdx := c.addConstant(NewString("__default__"))
 		c.emit(OpRegisterClassMethod, classNameIdx, defaultNameIdx, placeholder, isPublicOperand)
 	}
+	if hasDispIdMinus4 {
+		newEnumNameIdx := c.addConstant(NewString("__newenum__"))
+		c.emit(OpRegisterClassMethod, classNameIdx, newEnumNameIdx, placeholder, isPublicOperand)
+	}
 
 	c.addClassMethodDeclaration(className, CompiledClassMethodDecl{
 		Name:           methodName,
@@ -1939,7 +1964,7 @@ func (c *Compiler) parseClassMethodDeclaration(className string, isFunc bool, is
 }
 
 // parseClassPropertyDeclaration compiles one class Property Get/Let/Set body and validates signatures.
-func (c *Compiler) parseClassPropertyDeclaration(className string, isPublic bool, isDefaultMember bool) {
+func (c *Compiler) parseClassPropertyDeclaration(className string, isPublic bool, isDefaultMember bool, hasDispIdMinus4 bool) {
 	if c.matchKeywordOrIdentifier(vbscript.KeywordProperty, "property") {
 		c.move()
 	} else {
@@ -2098,10 +2123,22 @@ func (c *Compiler) parseClassPropertyDeclaration(className string, isPublic bool
 	switch accessorKind {
 	case classPropertyAccessorGet:
 		c.emit(OpRegisterClassPropertyGet, classNameIdx, propertyNameIdx, placeholder, len(paramResult.names), isPublicOperand)
+		if hasDispIdMinus4 {
+			newEnumNameIdx := c.addConstant(NewString("__newenum__"))
+			c.emit(OpRegisterClassPropertyGet, classNameIdx, newEnumNameIdx, placeholder, len(paramResult.names), isPublicOperand)
+		}
 	case classPropertyAccessorLet:
 		c.emit(OpRegisterClassPropertyLet, classNameIdx, propertyNameIdx, placeholder, len(paramResult.names), isPublicOperand)
+		if hasDispIdMinus4 {
+			newEnumNameIdx := c.addConstant(NewString("__newenum__"))
+			c.emit(OpRegisterClassPropertyLet, classNameIdx, newEnumNameIdx, placeholder, len(paramResult.names), isPublicOperand)
+		}
 	case classPropertyAccessorSet:
 		c.emit(OpRegisterClassPropertySet, classNameIdx, propertyNameIdx, placeholder, len(paramResult.names), isPublicOperand)
+		if hasDispIdMinus4 {
+			newEnumNameIdx := c.addConstant(NewString("__newenum__"))
+			c.emit(OpRegisterClassPropertySet, classNameIdx, newEnumNameIdx, placeholder, len(paramResult.names), isPublicOperand)
+		}
 	}
 
 	if isDefaultMember {

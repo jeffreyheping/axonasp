@@ -422,6 +422,8 @@ type VM struct {
 	regExpSubMatchesItems          map[int64]*regExpSubMatches
 	regExpSubMatchValueItems       map[int64]*regExpSubMatchValue
 	dictionaryItems                map[int64]*scriptingDictionary
+	collectionItems                map[int64]*vbsCollection
+	collectionEnumeratorItems      map[int64]*vbsCollectionEnumerator
 	nativeObjectProxies            map[int64]nativeObjectProxy
 	jsObjectItems                  map[int64]map[string]Value
 	jsObjectKeyOrder               map[int64][]string
@@ -769,6 +771,8 @@ func NewVM(bytecode []byte, constants []Value, globalCount int) *VM {
 		regExpSubMatchesItems:          make(map[int64]*regExpSubMatches),
 		regExpSubMatchValueItems:       make(map[int64]*regExpSubMatchValue),
 		dictionaryItems:                make(map[int64]*scriptingDictionary),
+		collectionItems:                make(map[int64]*vbsCollection),
+		collectionEnumeratorItems:      make(map[int64]*vbsCollectionEnumerator),
 		nativeObjectProxies:            make(map[int64]nativeObjectProxy),
 		jsObjectItems:                  make(map[int64]map[string]Value),
 		jsObjectKeyOrder:               make(map[int64][]string),
@@ -1775,6 +1779,8 @@ func (vm *VM) syncExecuteGlobalState(child *VM) {
 	vm.regExpSubMatchesItems = child.regExpSubMatchesItems
 	vm.regExpSubMatchValueItems = child.regExpSubMatchValueItems
 	vm.dictionaryItems = child.dictionaryItems
+	vm.collectionItems = child.collectionItems
+	vm.collectionEnumeratorItems = child.collectionEnumeratorItems
 	vm.nativeObjectProxies = child.nativeObjectProxies
 	vm.jsObjectItems = child.jsObjectItems
 	vm.jsObjectKeyOrder = child.jsObjectKeyOrder
@@ -6226,7 +6232,9 @@ func (vm *VM) dispatchNativeCall(objID int64, member string, args []Value) Value
 	if dictResult, handled := vm.dispatchDictionaryMethod(objID, member, args); handled {
 		return dictResult
 	}
-
+	if colResult, handled := vm.dispatchCollectionMethod(objID, member, args); handled {
+		return colResult
+	}
 	if fsoResult, handled := vm.dispatchFSOMethod(objID, member, args); handled {
 		return fsoResult
 	}
@@ -6902,6 +6910,9 @@ func (vm *VM) dispatchNativeCall(objID int64, member string, args []Value) Value
 				}
 				if progIDKey == "scripting.dictionary" {
 					return vm.newDictionaryObject()
+				}
+				if progIDKey == "collection" {
+					return vm.newCollectionObject()
 				}
 				if progIDKey == "adodb.stream" {
 					return vm.newADODBStreamObject()
@@ -7637,7 +7648,9 @@ func (vm *VM) dispatchMemberGet(target Value, member string) Value {
 	if dictResult, handled := vm.dispatchDictionaryPropertyGet(target.Num, member); handled {
 		return dictResult
 	}
-
+	if colResult, handled := vm.dispatchCollectionPropertyGet(target.Num, member); handled {
+		return colResult
+	}
 	if fsoResult, handled := vm.dispatchFSOPropertyGet(target.Num, member); handled {
 		return fsoResult
 	}
@@ -8080,7 +8093,9 @@ func (vm *VM) dispatchMemberSet(objID int64, member string, val Value) {
 	if vm.dispatchDictionaryPropertySet(objID, member, val) {
 		return
 	}
-
+	if vm.dispatchCollectionPropertySet(objID, member, val) {
+		return
+	}
 	if vm.dispatchADODBPropertySet(objID, member, val) {
 		return
 	}

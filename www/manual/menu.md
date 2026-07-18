@@ -55,7 +55,7 @@
     * [Application](md/asp/application.md)
     * [ASPError](md/asp/asperror.md)
     * [ASP Dictionary](md/asp/dictionary.md)
-* ASP Modernization
+* ASP/VBScript Modernization 
     * [Strong Typing Variables](md/asp-modernization/strong-typing-variables.md)
     * [Global Console Object](md/asp-modernization/console-object.md)
     * [Enumerations (Enum)](md/asp-modernization/enums.md)
@@ -67,6 +67,7 @@
     * [Event Orientation (Event, RaiseEvent, WithEvents)](md/asp-modernization/event-orientation.md)
     * [Interface Polymorphism (Implements)](md/asp-modernization/interface-polymorphism.md)
     * [Native File I/O (Open, Print, Close)](md/asp-modernization/native-file-io.md)
+    * [Custom Class Iteration (Collection)](md/asp-modernization/collection.md)
 * Javascript support (JScript)
     * [Use Javascript in ASP Pages](md/javascript/jscript-support.md)
     * Extended Features
