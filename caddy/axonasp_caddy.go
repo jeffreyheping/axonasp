@@ -5,6 +5,7 @@ import (
 	"html"
 	"io"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"os"
@@ -31,6 +32,7 @@ import (
 func init() {
 	caddy.RegisterModule(AxonASP{})
 	httpcaddyfile.RegisterHandlerDirective("axonasp", parseCaddyfile)
+	_ = mime.AddExtensionType(".svg", "image/svg+xml")
 }
 
 // AxonASP implements a Caddy HTTP handler for the AxonASP runtime.
@@ -61,6 +63,8 @@ type localVMProgramPool struct {
 	maxRetained int
 	program     axonvm.CachedProgram
 }
+
+var Version = "0.0.0.0"
 
 var (
 	vmPooledFromOffset uintptr
@@ -150,6 +154,8 @@ func (AxonASP) CaddyModule() caddy.ModuleInfo {
 
 // Provision sets up the AxonASP Caddy module.
 func (a *AxonASP) Provision(ctx caddy.Context) error {
+	axonvm.SetRuntimeVersion(strings.TrimSpace(Version))
+
 	a.logger = ctx.Logger(a)
 
 	// Redirect standard logger to Caddy zap logger
@@ -157,28 +163,76 @@ func (a *AxonASP) Provision(ctx caddy.Context) error {
 
 	a.vmPools = &vmPoolManager{pools: make(map[string]unsafe.Pointer)}
 
-	configPath, configErr := a.resolveConfigFilePath()
-	if configErr == nil {
-		a.resolvedConfigPath = configPath
-		axonconfig.SetCustomConfigPath(configPath)
-		// Force config loading with the path used by this Caddy module.
-		active := axonconfig.NewViper()
-		if normalizeErr := normalizeAxFunctionResourcePaths(active, configPath); normalizeErr != nil {
-			a.logger.Warn("Failed to normalize axfunctions resource paths", zap.Error(normalizeErr), zap.String("config", configPath))
+	if strings.TrimSpace(a.ConfigFile) != "" {
+		resolved, err := filepath.Abs(a.ConfigFile)
+		if err != nil {
+			return fmt.Errorf("invalid config_file path: %w", err)
 		}
+		axonconfig.SetCustomConfigPath(resolved)
+	}
 
-		v := viper.New()
-		v.SetConfigType("toml")
-		v.SetConfigFile(configPath)
-		if err := v.ReadInConfig(); err == nil {
-			_ = normalizeAxFunctionResourcePaths(v, configPath)
-			a.config = v
-			a.logger.Info("Loaded AxonASP config for Caddy", zap.String("path", configPath))
-		} else {
-			a.logger.Warn("Failed to read config file", zap.Error(err), zap.String("path", configPath))
+	active := axonconfig.NewViper()
+	configPath := active.ConfigFileUsed()
+	if configPath != "" {
+		if absConfigPath, err := filepath.Abs(configPath); err == nil {
+			configPath = absConfigPath
 		}
+	}
+	if configPath == "" {
+		// Fallback to custom candidate search
+		var configErr error
+		configPath, configErr = a.resolveConfigFilePath()
+		if configErr != nil {
+			return fmt.Errorf("failed to locate axonasp.toml using loader or fallback: %w", configErr)
+		}
+		axonconfig.SetCustomConfigPath(configPath)
+		active = axonconfig.NewViper()
+		configPath = active.ConfigFileUsed()
+		if absConfigPath, err := filepath.Abs(configPath); err == nil {
+			configPath = absConfigPath
+		}
+	}
+
+	a.resolvedConfigPath = configPath
+	if normalizeErr := normalizeAxFunctionResourcePaths(active, configPath); normalizeErr != nil {
+		return fmt.Errorf("failed to normalize axfunctions resource paths: %w", normalizeErr)
+	}
+
+	v := viper.New()
+	v.SetConfigType("toml")
+	v.SetConfigFile(configPath)
+	if err := v.ReadInConfig(); err != nil {
+		return fmt.Errorf("failed to read config file %q: %w", configPath, err)
+	}
+
+	if normalizeErr := normalizeAxFunctionResourcePaths(v, configPath); normalizeErr != nil {
+		return fmt.Errorf("failed to normalize local config resource paths: %w", normalizeErr)
+	}
+	a.config = v
+	a.logger.Info("Loaded AxonASP config for Caddy", zap.String("path", configPath))
+
+	// Verify logo path exists if configured
+	logoPath := active.GetString("axfunctions.ax_default_logo_path")
+	if logoPath != "" {
+		a.logger.Info("Provision: AxonASP logo path configured to", zap.String("path", logoPath))
+		if _, err := os.Stat(logoPath); err != nil {
+			return fmt.Errorf("configured ax_default_logo_path %q does not exist: %w", logoPath, err)
+		}
+		a.logger.Info("Provision: AxonASP logo file exists on disk", zap.String("path", logoPath))
 	} else {
-		a.logger.Warn("No axonasp.toml found for Caddy module", zap.Error(configErr))
+		a.logger.Info("Provision: AxonASP logo path is not configured")
+	}
+
+	// Verify CSS path exists if configured
+	cssPath := active.GetString("axfunctions.ax_default_css_path")
+	if cssPath != "" {
+		a.logger.Info("Provision: AxonASP CSS path configured to", zap.String("path", cssPath))
+		if _, err := os.Stat(cssPath); err != nil {
+			return fmt.Errorf("configured ax_default_css_path %q does not exist: %w", cssPath, err)
+		}
+		a.logger.Info("Provision: AxonASP CSS file exists on disk", zap.String("path", cssPath))
+	} else {
+		a.logger.Info("Provision: AxonASP CSS path is not configured")
 	}
 
 	a.scriptCache = axonvm.NewScriptCache(axonvm.BytecodeCacheMemoryOnly, "", 64)
@@ -282,13 +336,29 @@ func normalizeAxFunctionResourcePaths(v *viper.Viper, configPath string) error {
 		return fmt.Errorf("nil viper instance")
 	}
 
-	configDir := filepath.Dir(configPath)
+	absConfigPath, err := filepath.Abs(configPath)
+	if err != nil {
+		absConfigPath = configPath
+	}
+	configDir := filepath.Dir(absConfigPath)
 	normalize := func(key string) {
 		val := strings.TrimSpace(v.GetString(key))
 		if val == "" || filepath.IsAbs(val) {
 			return
 		}
-		v.Set(key, filepath.Clean(filepath.Join(configDir, val)))
+		// Try relative to configDir first
+		p := filepath.Clean(filepath.Join(configDir, val))
+		if _, err := os.Stat(p); err != nil {
+			// Try relative to the parent of configDir (project root)
+			p2 := filepath.Clean(filepath.Join(filepath.Dir(configDir), val))
+			if _, err2 := os.Stat(p2); err2 == nil {
+				p = p2
+			}
+		}
+		if absPath, err := filepath.Abs(p); err == nil {
+			p = absPath
+		}
+		v.Set(key, p)
 	}
 
 	normalize("axfunctions.ax_default_logo_path")
@@ -301,6 +371,17 @@ func (a *AxonASP) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 	path := r.URL.Path
 	if path == "" {
 		path = "/"
+	}
+
+	logoPath := axonconfig.NewViper().GetString("axfunctions.ax_default_logo_path")
+	if logoPath != "" {
+		if _, err := os.Stat(logoPath); err == nil {
+			a.logger.Info("ServeHTTP: AxonASP logo image path exists", zap.String("path", logoPath))
+		} else {
+			a.logger.Warn("ServeHTTP: AxonASP logo image path does not exist", zap.String("path", logoPath), zap.Error(err))
+		}
+	} else {
+		a.logger.Info("ServeHTTP: AxonASP logo image path is empty")
 	}
 
 	webRoot := "."
