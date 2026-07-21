@@ -8,6 +8,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/denisenkom/go-mssqldb v0.12.3
 	github.com/dlclark/regexp2 v1.12.0
+	github.com/ulikunitz/xz v0.5.12
 	github.com/fogleman/gg v1.3.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/fxamacker/cbor/v2 v2.9.2
