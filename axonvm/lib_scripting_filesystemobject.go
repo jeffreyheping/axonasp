@@ -34,7 +34,7 @@ import (
 	"time"
 
 	"g3pix.com.br/axonasp/vbscript"
-	"github.com/ricochet2200/go-disk-usage/du"
+	"github.com/shirou/gopsutil/v3/disk"
 )
 
 const (
@@ -65,6 +65,37 @@ type fsoTextStreamState struct {
 	line     int
 	column   int
 	standard bool
+}
+
+// fsoDiskUsageState stores disk usage metrics for one filesystem root.
+type fsoDiskUsageState struct {
+	total     uint64
+	free      uint64
+	available uint64
+}
+
+// Size returns the total capacity for the tracked filesystem root.
+func (d *fsoDiskUsageState) Size() uint64 {
+	if d == nil {
+		return 0
+	}
+	return d.total
+}
+
+// Free returns the free capacity for the tracked filesystem root.
+func (d *fsoDiskUsageState) Free() uint64 {
+	if d == nil {
+		return 0
+	}
+	return d.free
+}
+
+// Available returns the available capacity for the tracked filesystem root.
+func (d *fsoDiskUsageState) Available() uint64 {
+	if d == nil {
+		return 0
+	}
+	return d.available
 }
 
 // newFSORootObject creates a root Scripting.FileSystemObject instance.
@@ -693,14 +724,22 @@ func (vm *VM) fsoDriveRootFromName(driveName string) string {
 }
 
 // fsoDiskUsage returns disk usage information for one root path.
-func (vm *VM) fsoDiskUsage(rootPath string) *du.DiskUsage {
+func (vm *VM) fsoDiskUsage(rootPath string) *fsoDiskUsageState {
 	if strings.TrimSpace(rootPath) == "" {
 		return nil
 	}
 	if _, err := os.Stat(rootPath); err != nil {
 		return nil
 	}
-	return du.NewDiskUsage(rootPath)
+	usage, err := disk.Usage(rootPath)
+	if err != nil {
+		return nil
+	}
+	return &fsoDiskUsageState{
+		total:     usage.Total,
+		free:      usage.Free,
+		available: usage.Free,
+	}
 }
 
 // dispatchFSOFileMethod handles FSOFile methods and property Let behavior.

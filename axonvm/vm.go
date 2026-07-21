@@ -18,6 +18,7 @@
  * Modifications to the core source code of AxonASP Server must be
  * made available under this same license terms.
  */
+ // Package axonvm provides the core functions of AxonASP Server, it provides the virtual machine and the runtime environment for executing VBScript and JScript code, as well as the built-in objects and libraries used by ASP pages.
 package axonvm
 
 import (
@@ -250,6 +251,8 @@ type RuntimeClassFieldDef struct {
 	IsPublic   bool
 	WithEvents bool
 	Dims       []int // nil for plain variables; non-nil upper bounds for fixed-size arrays
+	Type       ValueType
+	ClassType  string
 }
 
 // RuntimeClassPropertyDef stores runtime metadata for one class property.
@@ -420,6 +423,8 @@ type VM struct {
 	regExpSubMatchesItems          map[int64]*regExpSubMatches
 	regExpSubMatchValueItems       map[int64]*regExpSubMatchValue
 	dictionaryItems                map[int64]*scriptingDictionary
+	collectionItems                map[int64]*vbsCollection
+	collectionEnumeratorItems      map[int64]*vbsCollectionEnumerator
 	nativeObjectProxies            map[int64]nativeObjectProxy
 	jsObjectItems                  map[int64]map[string]Value
 	jsObjectKeyOrder               map[int64][]string
@@ -767,6 +772,8 @@ func NewVM(bytecode []byte, constants []Value, globalCount int) *VM {
 		regExpSubMatchesItems:          make(map[int64]*regExpSubMatches),
 		regExpSubMatchValueItems:       make(map[int64]*regExpSubMatchValue),
 		dictionaryItems:                make(map[int64]*scriptingDictionary),
+		collectionItems:                make(map[int64]*vbsCollection),
+		collectionEnumeratorItems:      make(map[int64]*vbsCollectionEnumerator),
 		nativeObjectProxies:            make(map[int64]nativeObjectProxy),
 		jsObjectItems:                  make(map[int64]map[string]Value),
 		jsObjectKeyOrder:               make(map[int64][]string),
@@ -1160,7 +1167,7 @@ func opcodeOperandSize(op OpCode, bytecode []byte, ip int) int {
 			return 9
 		case ExtOpFilePrint, ExtOpFileWrite:
 			return 3
-		case ExtOpFileOpen, ExtOpFileClose, ExtOpFileLineInput, ExtOpFilePut, ExtOpFileGet, ExtOpFileFreeFile, ExtOpAxonASP, ExtOpJSReThrow:
+		case ExtOpFileOpen, ExtOpFileClose, ExtOpFileLineInput, ExtOpFilePut, ExtOpFileGet, ExtOpFileFreeFile, ExtOpAxonASP, ExtOpJSReThrow, ExtOpCloneRecord, ExtOpShiftLeft, ExtOpShiftRight:
 			return 1
 		case ExtOpJSMathSin, ExtOpJSMathCos, ExtOpJSMathTan, ExtOpJSMathAbs, ExtOpJSMathFloor, ExtOpJSMathCeil, ExtOpJSMathRound, ExtOpJSMathSqrt, ExtOpJSMathMin, ExtOpJSMathMax:
 			return 1
@@ -1177,9 +1184,9 @@ func opcodeOperandSize(op OpCode, bytecode []byte, ip int) int {
 	// 4-byte operands: nameConstIdx(2) + icNodeID(2)
 	case OpJSMemberGet, OpJSMemberSet:
 		return 4
-	// 6-byte operands: classNameIdx(2) + fieldNameIdx(2) + isPublic(2)
+	// 9-byte operands: classNameIdx(2) + fieldNameIdx(2) + isPublic(2) + type(1) + classTypeIdx(2)
 	case OpRegisterClassField:
-		return 6
+		return 9
 	// 6-byte operands: classNameIdx(2) + fieldNameIdx(2) + dimCount(2); dim values are on stack
 	case OpInitClassArrayField:
 		return 6
@@ -1235,7 +1242,7 @@ func remapExecuteGlobalBytecode(bytecode []byte, constBase int, bytecodeBase int
 				ip += 2
 			case ExtOpAxonASP, ExtOpJSMathSin, ExtOpJSMathCos, ExtOpJSMathTan, ExtOpJSMathAbs, ExtOpJSMathFloor, ExtOpJSMathCeil, ExtOpJSMathRound, ExtOpJSMathSqrt, ExtOpJSMathMin, ExtOpJSMathMax,
 				ExtOpFileOpen, ExtOpFileClose, ExtOpFileLineInput, ExtOpFilePut, ExtOpFileGet, ExtOpFileFreeFile,
-				ExtOpJSReThrow:
+				ExtOpJSReThrow, ExtOpCloneRecord, ExtOpShiftLeft, ExtOpShiftRight:
 				// No operands to remap or skip
 			case ExtOpFilePrint, ExtOpFileWrite:
 				ip += 2
@@ -1362,7 +1369,11 @@ func remapExecuteGlobalBytecode(bytecode []byte, constBase int, bytecodeBase int
 			ip += 2
 			fieldIdx := int(binary.BigEndian.Uint16(bytecode[ip:])) + constBase
 			binary.BigEndian.PutUint16(bytecode[ip:], uint16(fieldIdx))
-			ip += 4
+			ip += 4 // skip fieldIdx(2) + isPublic(2)
+			ip += 1 // skip type(1)
+			classTypeIdx := int(binary.BigEndian.Uint16(bytecode[ip:])) + constBase
+			binary.BigEndian.PutUint16(bytecode[ip:], uint16(classTypeIdx))
+			ip += 2
 		case OpInitClassArrayField:
 			// classNameIdx(2) + fieldNameIdx(2) + dimCount(2); dim values came from OpConstant (already remapped)
 			classArrIdx := int(binary.BigEndian.Uint16(bytecode[ip:])) + constBase
@@ -1769,6 +1780,8 @@ func (vm *VM) syncExecuteGlobalState(child *VM) {
 	vm.regExpSubMatchesItems = child.regExpSubMatchesItems
 	vm.regExpSubMatchValueItems = child.regExpSubMatchValueItems
 	vm.dictionaryItems = child.dictionaryItems
+	vm.collectionItems = child.collectionItems
+	vm.collectionEnumeratorItems = child.collectionEnumeratorItems
 	vm.nativeObjectProxies = child.nativeObjectProxies
 	vm.jsObjectItems = child.jsObjectItems
 	vm.jsObjectKeyOrder = child.jsObjectKeyOrder
@@ -2049,6 +2062,8 @@ aspExecLoop:
 						newVal.Interface = className
 					}
 				}
+			} else {
+				newVal.Interface = ""
 			}
 
 			// Phase 4: WithEvents binding
@@ -2152,6 +2167,8 @@ aspExecLoop:
 					}
 				}
 				newVal = coerced
+			} else {
+				newVal.Interface = ""
 			}
 			// Decrement reference count only for object slots to avoid hot-path call overhead.
 			if vm.Globals[idx].Type == VTObject {
@@ -2191,6 +2208,8 @@ aspExecLoop:
 						}
 					}
 				}
+			} else {
+				newVal.Interface = ""
 			}
 			// Decrement reference count only for object slots to avoid hot-path call overhead.
 			if vm.stack[slot].Type == VTObject {
@@ -2311,6 +2330,8 @@ aspExecLoop:
 						}
 					}
 				}
+			} else {
+				newVal.Interface = ""
 			}
 			// Decrement reference count only for object slots to avoid hot-path call overhead.
 			if vm.stack[slot].Type == VTObject {
@@ -3063,7 +3084,16 @@ aspExecLoop:
 			vm.ip += 2
 			isPublic := binary.BigEndian.Uint16(vm.bytecode[vm.ip:]) != 0
 			vm.ip += 2
-			vm.registerRuntimeClassField(vm.constants[classNameIdx].Str, vm.constants[fieldNameIdx].Str, isPublic)
+			fieldType := ValueType(vm.bytecode[vm.ip])
+			vm.ip += 1
+			classTypeIdx := binary.BigEndian.Uint16(vm.bytecode[vm.ip:])
+			vm.ip += 2
+
+			classType := ""
+			if classTypeIdx != 0xFFFF {
+				classType = vm.constants[classTypeIdx].Str
+			}
+			vm.registerRuntimeClassField(vm.constants[classNameIdx].Str, vm.constants[fieldNameIdx].Str, isPublic, fieldType, classType)
 
 		case OpInitClassArrayField:
 			classArrNameIdx := binary.BigEndian.Uint16(vm.bytecode[vm.ip:])
@@ -3227,9 +3257,17 @@ aspExecLoop:
 					continue
 				}
 				requirePublic := target.Num != vm.activeClassObjectID
+				interfaceName := target.Interface
+				if interfaceName != "" {
+					if instance, exists := vm.runtimeClassItems[target.Num]; exists && instance != nil {
+						if strings.EqualFold(interfaceName, instance.ClassName) {
+							interfaceName = ""
+						}
+					}
+				}
 				methodName := vm.constants[memberIdx].Str
-				if target.Interface != "" {
-					methodName = target.Interface + "_" + methodName
+				if interfaceName != "" {
+					methodName = interfaceName + "_" + methodName
 				}
 				methodTarget, ok := vm.resolveRuntimeClassMethod(target, methodName, requirePublic)
 				if ok {
@@ -3254,8 +3292,8 @@ aspExecLoop:
 					}
 				}
 				propertyName := vm.constants[memberIdx].Str
-				if target.Interface != "" {
-					propertyName = target.Interface + "_" + propertyName
+				if interfaceName != "" {
+					propertyName = interfaceName + "_" + propertyName
 				}
 				propertyTarget, ok := vm.resolveRuntimeClassPropertyGet(target, propertyName, argCount, requirePublic)
 				if ok {
@@ -3362,9 +3400,17 @@ aspExecLoop:
 					continue
 				}
 				requirePublic := target.Num != vm.activeClassObjectID
+				interfaceName := target.Interface
+				if interfaceName != "" {
+					if instance, exists := vm.runtimeClassItems[target.Num]; exists && instance != nil {
+						if strings.EqualFold(interfaceName, instance.ClassName) {
+							interfaceName = ""
+						}
+					}
+				}
 				memberName := member.String()
-				if target.Interface != "" {
-					memberName = target.Interface + "_" + memberName
+				if interfaceName != "" {
+					memberName = interfaceName + "_" + memberName
 				}
 				propertyTarget, ok := vm.resolveRuntimeClassPropertyGet(target, memberName, 0, requirePublic)
 				if ok {
@@ -3521,9 +3567,7 @@ aspExecLoop:
 					continue
 				}
 				decl := vm.RecordDecls[defIdx]
-				rec := vm.acquireRecord(len(decl.Members))
-				rec.DefIdx = int(defIdx)
-				vm.push(Value{Type: VTRecord, Rec: rec})
+				vm.push(vm.initRecordValueRecursive(decl.Name))
 
 			case ExtOpGetRecordMember:
 				memberIdx := binary.BigEndian.Uint16(vm.bytecode[vm.ip:])
@@ -3842,6 +3886,44 @@ aspExecLoop:
 				a := vm.jsToNumber(vm.pop()).Flt
 				vm.push(NewDouble(math.Max(a, b)))
 
+			case ExtOpCloneRecord:
+				val := vm.pop()
+				if val.Type == VTRecord {
+					vm.push(vm.cloneValue(val))
+				} else {
+					vm.push(val)
+				}
+
+			case ExtOpShiftLeft:
+				right := vm.pop()
+				left := vm.pop()
+				if isNull(left) || isNull(right) {
+					vm.push(NewNull())
+					continue
+				}
+				shift := uint64(vm.coerceInt64(right))
+				val := uint64(vm.coerceInt64(left))
+				if shift >= 64 {
+					vm.push(NewInteger(0))
+				} else {
+					vm.push(NewInteger(int64(val << shift)))
+				}
+
+			case ExtOpShiftRight:
+				right := vm.pop()
+				left := vm.pop()
+				if isNull(left) || isNull(right) {
+					vm.push(NewNull())
+					continue
+				}
+				shift := uint64(vm.coerceInt64(right))
+				val := uint64(vm.coerceInt64(left))
+				if shift >= 64 {
+					vm.push(NewInteger(0))
+				} else {
+					vm.push(NewInteger(int64(val >> shift)))
+				}
+
 			default:
 				vm.raise(vbscript.InternalError, "Unsupported extended opcode")
 			}
@@ -3858,9 +3940,17 @@ aspExecLoop:
 				requirePublic := target.Num != vm.activeClassObjectID
 				preferSet := op == OpMemberSetSet || value.Type == VTObject || value.Type == VTNativeObject
 				strictSet := op == OpMemberSetSet
+				interfaceName := target.Interface
+				if interfaceName != "" {
+					if instance, exists := vm.runtimeClassItems[target.Num]; exists && instance != nil {
+						if strings.EqualFold(interfaceName, instance.ClassName) {
+							interfaceName = ""
+						}
+					}
+				}
 				memberName := vm.constants[memberIdx].Str
-				if target.Interface != "" {
-					memberName = target.Interface + "_" + memberName
+				if interfaceName != "" {
+					memberName = interfaceName + "_" + memberName
 				}
 				propertyTarget, ok := vm.resolveRuntimeClassPropertySet(target, memberName, 1, preferSet, strictSet, requirePublic)
 				if ok {
@@ -4044,7 +4134,9 @@ aspExecLoop:
 				callArgs = append(callArgs, value)
 				_ = vm.dispatchNativeCall(target.Num, vm.constants[memberIdx].Str, callArgs)
 			} else if target.Type == VTObject {
-				// Indexed default Property Let: obj(idx...) = value → call property Let.
+				// Indexed access: obj.member(idx...) = value
+				// First try Property Set with (index, value) arguments.
+				requirePublic := target.Num != vm.activeClassObjectID
 				memberName := vm.constants[memberIdx].Str
 				if memberName == "" {
 					memberName = "__default__"
@@ -4053,9 +4145,20 @@ aspExecLoop:
 				letArgs := vm.ensureCombineBuffer(letArgCount)[:0]
 				letArgs = append(letArgs, indexes...)
 				letArgs = append(letArgs, value)
-				propertyTarget, ok := vm.resolveRuntimeClassPropertySet(target, memberName, letArgCount, false, false, true)
+				propertyTarget, ok := vm.resolveRuntimeClassPropertySet(target, memberName, letArgCount, false, false, requirePublic)
 				if ok {
 					if vm.beginUserSubCall(propertyTarget, letArgs, true, target.Num) {
+						continue
+					}
+				}
+				// If no Property Set exists, try to resolve as a field and
+				// assign to an array element (e.g. obj.Arr(0) = val).
+				if fieldValue, ok := vm.resolveRuntimeClassField(target, memberName, requirePublic); ok {
+					if fieldValue.Type == VTArray {
+						vm.assignArrayElement(fieldValue, indexes, value)
+						// Write the modified array back to the field so the
+						// change is visible through the class member.
+						vm.assignRuntimeClassField(target, memberName, fieldValue, requirePublic)
 						continue
 					}
 				}
@@ -5841,7 +5944,11 @@ func (vm *VM) assignArrayElement(target Value, indexes []Value, assigned Value) 
 	// Decrement reference count of previous value in this array slot.
 	prevVal := current.Values[lastIndex-current.Lower]
 	vm.decrementObjectRefCount(prevVal)
-	// Assign new value.
+	// Assign new value — clone VTRecord values so array elements own their
+	// own copy (value semantics), matching VB6 UDT array behaviour.
+	if assigned.Type == VTRecord && assigned.Rec != nil {
+		assigned = vm.cloneValue(assigned)
+	}
 	current.Values[lastIndex-current.Lower] = assigned
 	// Increment reference count of new value.
 	vm.incrementObjectRefCount(assigned)
@@ -6156,7 +6263,9 @@ func (vm *VM) dispatchNativeCall(objID int64, member string, args []Value) Value
 	if dictResult, handled := vm.dispatchDictionaryMethod(objID, member, args); handled {
 		return dictResult
 	}
-
+	if colResult, handled := vm.dispatchCollectionMethod(objID, member, args); handled {
+		return colResult
+	}
 	if fsoResult, handled := vm.dispatchFSOMethod(objID, member, args); handled {
 		return fsoResult
 	}
@@ -6832,6 +6941,9 @@ func (vm *VM) dispatchNativeCall(objID int64, member string, args []Value) Value
 				}
 				if progIDKey == "scripting.dictionary" {
 					return vm.newDictionaryObject()
+				}
+				if progIDKey == "collection" {
+					return vm.newCollectionObject()
 				}
 				if progIDKey == "adodb.stream" {
 					return vm.newADODBStreamObject()
@@ -7567,7 +7679,9 @@ func (vm *VM) dispatchMemberGet(target Value, member string) Value {
 	if dictResult, handled := vm.dispatchDictionaryPropertyGet(target.Num, member); handled {
 		return dictResult
 	}
-
+	if colResult, handled := vm.dispatchCollectionPropertyGet(target.Num, member); handled {
+		return colResult
+	}
 	if fsoResult, handled := vm.dispatchFSOPropertyGet(target.Num, member); handled {
 		return fsoResult
 	}
@@ -8010,7 +8124,9 @@ func (vm *VM) dispatchMemberSet(objID int64, member string, val Value) {
 	if vm.dispatchDictionaryPropertySet(objID, member, val) {
 		return
 	}
-
+	if vm.dispatchCollectionPropertySet(objID, member, val) {
+		return
+	}
 	if vm.dispatchADODBPropertySet(objID, member, val) {
 		return
 	}
@@ -8789,7 +8905,7 @@ func (vm *VM) registerRuntimeClassMethod(className string, methodName string, me
 }
 
 // registerRuntimeClassField stores one direct field entry for one class definition.
-func (vm *VM) registerRuntimeClassField(className string, fieldName string, isPublic bool) {
+func (vm *VM) registerRuntimeClassField(className string, fieldName string, isPublic bool, fieldType ValueType, classType string) {
 	trimmedClassName := strings.TrimSpace(className)
 	trimmedFieldName := strings.TrimSpace(fieldName)
 	if trimmedClassName == "" || trimmedFieldName == "" {
@@ -8809,7 +8925,12 @@ func (vm *VM) registerRuntimeClassField(className string, fieldName string, isPu
 		classDef.Fields = make(map[string]RuntimeClassFieldDef)
 	}
 
-	classDef.Fields[strings.ToLower(trimmedFieldName)] = RuntimeClassFieldDef{Name: trimmedFieldName, IsPublic: isPublic}
+	classDef.Fields[strings.ToLower(trimmedFieldName)] = RuntimeClassFieldDef{
+		Name:      trimmedFieldName,
+		IsPublic:  isPublic,
+		Type:      fieldType,
+		ClassType: classType,
+	}
 	vm.runtimeClasses[lowerClassName] = classDef
 	vm.bumpRuntimeClassVersion()
 }
@@ -9403,11 +9524,18 @@ func (vm *VM) beginUserSubCall(target Value, args []Value, discardReturn bool, b
 	// Apply VB6 As Type declarations for this function's local variables.
 	entryPoint := int(target.Num)
 	if slotTypes, exists := vm.funcLocalTypes[entryPoint]; exists {
+		slotClassTypes := vm.funcLocalClassTypes[entryPoint]
 		for offset, declaredType := range slotTypes {
 			if offset < localCount {
 				idx := vm.fp + offset
 				vm.localTypes[idx] = declaredType
-				vm.stack[idx] = vm.zeroValueForType(declaredType)
+				val := vm.zeroValueForType(declaredType)
+				if declaredType == VTObject && slotClassTypes != nil {
+					if className, ok := slotClassTypes[offset]; ok {
+						val.Interface = className
+					}
+				}
+				vm.stack[idx] = val
 			}
 		}
 	}
@@ -9684,7 +9812,19 @@ func (vm *VM) newRuntimeClassInstance(className string) Value {
 		if len(fieldDef.Dims) > 0 {
 			vm.runtimeClassItems[instanceID].Members[fieldKey] = ValueFromVBArray(buildDimArray(fieldDef.Dims))
 		} else {
-			vm.runtimeClassItems[instanceID].Members[fieldKey] = Value{Type: VTEmpty}
+			if fieldDef.Type == VTObject {
+				val := Value{Type: VTNothing}
+				if fieldDef.ClassType != "" {
+					val.Interface = fieldDef.ClassType
+				}
+				vm.runtimeClassItems[instanceID].Members[fieldKey] = val
+			} else if fieldDef.Type == VTRecord {
+				vm.runtimeClassItems[instanceID].Members[fieldKey] = vm.initRecordValueRecursive(fieldDef.ClassType)
+			} else if fieldDef.Type != VTEmpty {
+				vm.runtimeClassItems[instanceID].Members[fieldKey] = vm.zeroValueForType(fieldDef.Type)
+			} else {
+				vm.runtimeClassItems[instanceID].Members[fieldKey] = Value{Type: VTEmpty}
+			}
 		}
 	}
 
@@ -9704,10 +9844,43 @@ func (vm *VM) pop() Value {
 // applyLocalVarTypes applies VB6 As Type declarations from the compiler to the VM's
 // funcLocalTypes map.
 func (vm *VM) applyLocalVarTypes(compiler *Compiler) {
-	if vm == nil || compiler == nil {
+	if vm == nil || compiler == nil || vm.funcLocalTypes == nil {
 		return
 	}
-	vm.applyLocalVarTypesFromMaps(compiler.LocalVarTypes(), compiler.LocalRecordTypes())
+	for entryPoint, typesMap := range compiler.FuncLocalTypes() {
+		slotTypes := make(map[int]ValueType)
+		slotClassTypes := make(map[int]string)
+		var localNames []string
+		for _, constVal := range vm.constants {
+			if constVal.Type == VTUserSub && int(constVal.Num) == entryPoint {
+				localNames = constVal.Names
+				break
+			}
+		}
+		if len(localNames) == 0 {
+			continue
+		}
+		for offset, name := range localNames {
+			lower := strings.ToLower(name)
+			if declaredType, exists := typesMap[lower]; exists && declaredType != VTEmpty {
+				slotTypes[offset] = declaredType
+				if declaredType == VTObject || declaredType == VTRecord {
+					if className, ok := compiler.FuncLocalRecordTypes()[entryPoint][lower]; ok {
+						slotClassTypes[offset] = className
+					}
+				}
+			}
+		}
+		if len(slotTypes) > 0 {
+			vm.funcLocalTypes[entryPoint] = slotTypes
+		}
+		if len(slotClassTypes) > 0 {
+			if vm.funcLocalClassTypes == nil {
+				vm.funcLocalClassTypes = make(map[int]map[int]string)
+			}
+			vm.funcLocalClassTypes[entryPoint] = slotClassTypes
+		}
+	}
 }
 
 // applyLocalVarTypesFromMaps applies VB6 As Type declarations from provided maps to the VM's
@@ -9816,7 +9989,7 @@ func (vm *VM) coerceToDeclaredType(v Value, declaredType ValueType) (Value, erro
 
 	if declaredType == VTRecord {
 		if v.Type == VTRecord {
-			return v, nil
+			return vm.cloneValue(v), nil
 		}
 		return Value{}, fmt.Errorf("Type mismatch: expected Record")
 	}
@@ -10161,6 +10334,52 @@ func (vm *VM) releaseRecord(rec *VBRecord) {
 	rec.DefIdx = 0
 	rec.Members = rec.Members[:0]
 	recordPool.Put(rec)
+}
+
+// cloneValue deep-copies a Value representing a UDT/record.
+func (vm *VM) cloneValue(v Value) Value {
+	if v.Type == VTRecord && v.Rec != nil {
+		rec := vm.acquireRecord(len(v.Rec.Members))
+		rec.DefIdx = v.Rec.DefIdx
+		for i, m := range v.Rec.Members {
+			rec.Members[i] = vm.cloneValue(m)
+		}
+		return Value{Type: VTRecord, Rec: rec}
+	} else if v.Type == VTArray && v.Arr != nil {
+		return Value{Type: VTArray, Arr: vm.cloneArray(v.Arr)}
+	}
+	return v
+}
+
+// initRecordValueRecursive recursively allocates and initializes UDT fields and sub-UDTs to their zero values.
+func (vm *VM) initRecordValueRecursive(udtName string) Value {
+	lowerUDT := strings.ToLower(udtName)
+	if defIdx, exists := vm.RecordDeclLookup[lowerUDT]; exists {
+		decl := vm.RecordDecls[defIdx]
+		rec := vm.acquireRecord(len(decl.Members))
+		rec.DefIdx = defIdx
+		for i, m := range decl.Members {
+			if m.Type == VTRecord {
+				rec.Members[i] = vm.initRecordValueRecursive(m.UDTName)
+			} else {
+				rec.Members[i] = vm.zeroValueForType(m.Type)
+			}
+		}
+		return Value{Type: VTRecord, Rec: rec}
+	}
+	return Value{Type: VTRecord}
+}
+
+// cloneArray deep-copies a VBArray.
+func (vm *VM) cloneArray(arr *VBArray) *VBArray {
+	if arr == nil {
+		return nil
+	}
+	values := make([]Value, len(arr.Values))
+	for i := range arr.Values {
+		values[i] = vm.cloneValue(arr.Values[i])
+	}
+	return NewVBArrayFromValues(arr.Lower, values)
 }
 
 func (vm *VM) ensureCLIMode() {

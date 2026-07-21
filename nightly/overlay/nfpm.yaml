@@ -10,8 +10,8 @@ description: "AxonASP Server - ASP Classic server with Proxy, FastCGI, CLI, Test
 vendor: "G3pix"
 homepage: "https://g3pix.com.br/axonasp"
 license: "MPL-2.0"
-recommends: 
-  - "net-tools" 
+recommends:
+  - "net-tools"
 
 archlinux:
   packager: G3pix <axonasp@g3pix.com.br>
@@ -110,4 +110,3 @@ contents:
   - src: /opt/axonasp/temp/session/
     dst: /var/lib/axonasp/session/
     type: symlink
-

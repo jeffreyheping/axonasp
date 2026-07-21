@@ -40,6 +40,7 @@ const (
 	PrecAnd                   // And
 	PrecNot                   // Not
 	PrecEquality              // = <> < > <= >= Is
+	PrecShift                 // << >>
 	PrecConcat                // &
 	PrecTerm                  // + -
 	PrecFactor                // * / \ Mod
@@ -97,6 +98,15 @@ func (c *Compiler) emitIdentifierValue(name string) {
 		}
 	}
 
+	// If the identifier is an Enum type name followed by '.', skip the
+	// StaticObjects fallback so that the PunctDot infix handler can resolve
+	// EnumType.Member as a compile-time integer constant.
+	if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctDot {
+		if _, isEnum := c.enumTypeLookup[strings.ToLower(strings.TrimSpace(trimmedName))]; isEnum {
+			goto resolveIdentifierNormally
+		}
+	}
+
 	if p, ok := c.next.(*vbscript.PunctuationToken); !(ok && p.Type == vbscript.PunctLParen) {
 		if c.emitStaticObjectIdentifierFallback(trimmedName) {
 			return
@@ -141,6 +151,24 @@ resolveIdentifierNormally:
 		}
 	}
 
+	var udtName string
+	var isUDT bool
+	if op == OpGetGlobal {
+		udtName, isUDT = c.globalRecordTypes[strings.ToLower(trimmedName)]
+	} else if op == OpGetLocal {
+		udtName, isUDT = c.localRecordTypes[strings.ToLower(trimmedName)]
+	} else if op == OpGetClassMember && c.currentClassName != "" {
+		if field, ok := c.getClassFieldDeclaration(c.currentClassName, trimmedName); ok && field.Type == VTRecord {
+			udtName = field.ClassType
+			isUDT = true
+		}
+	}
+	if isUDT {
+		c.updateLastEmittedType(VTRecord, udtName)
+	} else {
+		c.updateLastEmittedType(VTEmpty, "")
+	}
+
 	if op == OpGetGlobal || op == OpGetLocal || op == OpGetClassMember {
 		c.emitTrailingCoerceIfValueContext()
 	}
@@ -155,7 +183,7 @@ func (c *Compiler) emitTrailingCoerceIfValueContext() {
 	}
 	if !suppressCoerce {
 		if kw, ok := c.next.(*vbscript.KeywordToken); ok {
-			suppressCoerce = kw.Keyword == vbscript.KeywordIs
+			suppressCoerce = kw.Keyword == vbscript.KeywordIs || kw.Keyword == vbscript.KeywordIsNot
 		}
 	}
 	if !suppressCoerce {
@@ -547,6 +575,8 @@ func (c *Compiler) getPrecedence(token vbscript.Token) Precedence {
 			return PrecFactor
 		case vbscript.PunctEqual, vbscript.PunctNotEqual, vbscript.PunctLess, vbscript.PunctGreater, vbscript.PunctLessOrEqual, vbscript.PunctGreaterOrEqual:
 			return PrecEquality
+		case vbscript.PunctShiftLeft, vbscript.PunctShiftRight:
+			return PrecShift
 		}
 	case *vbscript.KeywordToken:
 		switch t.Keyword {
@@ -556,15 +586,15 @@ func (c *Compiler) getPrecedence(token vbscript.Token) Precedence {
 			return PrecImp
 		case vbscript.KeywordXor:
 			return PrecXor
-		case vbscript.KeywordAnd:
+		case vbscript.KeywordAnd, vbscript.KeywordAndAlso:
 			return PrecAnd
-		case vbscript.KeywordOr:
+		case vbscript.KeywordOr, vbscript.KeywordOrElse:
 			return PrecOr
 		case vbscript.KeywordNot:
 			return PrecNot
 		case vbscript.KeywordMod:
 			return PrecFactor
-		case vbscript.KeywordIs:
+		case vbscript.KeywordIs, vbscript.KeywordIsNot:
 			return PrecEquality
 		}
 	}
@@ -771,10 +801,45 @@ func (c *Compiler) getInfixRule(token vbscript.Token) func(*Compiler, vbscript.T
 		switch t.Type {
 		case vbscript.PunctDot:
 			return func(c *Compiler, tk vbscript.Token) {
+				// Save the last call target name/position before clearing —
+				// needed for EnumType.Member resolution.
+				savedCallTargetName := c.lastCallTargetName
+				savedCallTargetPos := c.lastCallTargetPos
+				savedLastCoercePos := c.lastCoercePos
 				c.undoTrailingCoerce() // member access needs raw object reference
 				c.emitAutoCallForBareGlobalBeforeMemberAccess()
 				c.clearLastCallTarget()
 				name := c.expectIdentifier()
+
+				// Check if the prefix expression is an Enum type name.
+				// If so, resolve EnumType.Member as a compile-time integer constant.
+				if savedCallTargetName != "" {
+					enumLower := strings.ToLower(strings.TrimSpace(savedCallTargetName))
+					if members, ok := c.enumTypeLookup[enumLower]; ok {
+						memberLower := strings.ToLower(name)
+						if memberVal, ok := members[memberLower]; ok {
+							// Undo the emitted bytecode for the enum type name identifier
+							// (either OpGetGlobal 3 bytes, or OpConstant 3 bytes, possibly
+							// followed by OpCoerceToValue). Truncate back to the position
+							// before the prefix was emitted, then emit just the member constant.
+							truncatePos := max(savedCallTargetPos, 0)
+							// If emitAutoCallForBareGlobalBeforeMemberAccess emitted
+							// OpCoerceToValue, remove that extra byte too.
+							if savedLastCoercePos == len(c.bytecode)-1 && savedLastCoercePos >= 0 {
+								c.bytecode = c.bytecode[:savedLastCoercePos]
+							}
+							if truncatePos < len(c.bytecode) {
+								c.bytecode = c.bytecode[:truncatePos]
+							}
+							constIdx := c.addConstant(memberVal)
+							c.emit(OpConstant, constIdx)
+							c.updateLastEmittedType(VTInteger, "")
+							c.emitTrailingCoerceIfValueContext()
+							return
+						}
+					}
+				}
+
 				// If followed by '(', compile as a direct member call (OpCallMember).
 				// This avoids the OpMemberGet+OpCall pattern that breaks zero-arg
 				// getter calls and multi-arg collections (e.g. Cookies("k","Domain")).
@@ -961,6 +1026,18 @@ func (c *Compiler) getInfixRule(token vbscript.Token) func(*Compiler, vbscript.T
 				c.parseExpression(PrecFactor)
 				c.emit(OpIDiv)
 			}
+		case vbscript.PunctShiftLeft:
+			return func(c *Compiler, tk vbscript.Token) {
+				c.clearLastCallTarget()
+				c.parseExpression(PrecShift)
+				c.emitExt(ExtOpShiftLeft)
+			}
+		case vbscript.PunctShiftRight:
+			return func(c *Compiler, tk vbscript.Token) {
+				c.clearLastCallTarget()
+				c.parseExpression(PrecShift)
+				c.emitExt(ExtOpShiftRight)
+			}
 		}
 	case *vbscript.KeywordToken:
 		switch t.Keyword {
@@ -985,6 +1062,12 @@ func (c *Compiler) getInfixRule(token vbscript.Token) func(*Compiler, vbscript.T
 					c.emit(OpIsRef)
 				}
 			}
+		case vbscript.KeywordIsNot:
+			return func(c *Compiler, tk vbscript.Token) {
+				c.undoTrailingCoerce()
+				c.parseExpression(PrecEquality)
+				c.emit(OpIsNotRef)
+			}
 		case vbscript.KeywordAnd:
 			return func(c *Compiler, tk vbscript.Token) {
 				c.clearLastCallTarget()
@@ -996,6 +1079,43 @@ func (c *Compiler) getInfixRule(token vbscript.Token) func(*Compiler, vbscript.T
 				c.clearLastCallTarget()
 				c.parseExpression(PrecOr)
 				c.emit(OpOr)
+			}
+		case vbscript.KeywordAndAlso:
+			return func(c *Compiler, tk vbscript.Token) {
+				c.clearLastCallTarget()
+				// LHS is already on the stack from the outer parseExpression loop.
+				// If LHS is false, short-circuit: skip RHS evaluation, push False.
+				shortJump := c.emitJump(OpJumpIfFalse)
+				// Parse RHS (only reached if LHS is truthy).
+				c.parseExpression(PrecAnd)
+				shortJump2 := c.emitJump(OpJumpIfFalse)
+				trueIdx := c.addConstant(NewBool(true))
+				c.emit(OpConstant, trueIdx)
+				endJump := c.emitJump(OpJump)
+				// Short-circuit target: push False.
+				falseIdx := c.addConstant(NewBool(false))
+				c.patchJump(shortJump)
+				c.patchJump(shortJump2)
+				c.emit(OpConstant, falseIdx)
+				c.patchJump(endJump)
+			}
+		case vbscript.KeywordOrElse:
+			return func(c *Compiler, tk vbscript.Token) {
+				c.clearLastCallTarget()
+				// LHS is already on the stack from the outer parseExpression loop.
+				// If LHS is true, short-circuit: skip RHS evaluation, push True.
+				shortJump := c.emitJump(OpJumpIfTrue)
+				// Parse RHS (only reached if LHS is falsy).
+				c.parseExpression(PrecOr)
+				shortJump2 := c.emitJump(OpJumpIfTrue)
+				falseIdx := c.addConstant(NewBool(false))
+				c.emit(OpConstant, falseIdx)
+				endJump := c.emitJump(OpJump)
+				trueIdx := c.addConstant(NewBool(true))
+				c.patchJump(shortJump)
+				c.patchJump(shortJump2)
+				c.emit(OpConstant, trueIdx)
+				c.patchJump(endJump)
 			}
 		case vbscript.KeywordXor:
 			return func(c *Compiler, tk vbscript.Token) {
@@ -1090,6 +1210,11 @@ func (c *Compiler) Compile() (err error) {
 		return nil
 	}
 
+	// Pre-register Type declarations (UDTs) before prebindTopLevelDimDeclarations
+	// so that UDT names are in recordDeclLookup when Class declarations that
+	// reference them are compiled during compileDefinitionPreBindingPass.
+	// This uses a cloned lexer and does not consume the main token stream.
+	c.preRegisterTypeDeclarations()
 	c.prebindTopLevelDimDeclarations()
 	c.resetTokenStream()
 	compiledDefinitionBounds := c.compileDefinitionPreBindingPass()

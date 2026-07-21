@@ -35,7 +35,7 @@ jobs:
       version: ${{ steps.version.outputs.value }}
     steps:
       - name: Checkout fork
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - name: Fetch upstream main
@@ -320,7 +320,7 @@ jobs:
         arch: [amd64, arm64]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -339,8 +339,8 @@ jobs:
           if ($subdir) {
             Rename-Item -Path $subdir.FullName -NewName "installer-src"
           }
-          # Copy installer.iss and resources into the source directory
-          Copy-Item installer.iss installer-src\
+          # Copy innosetup.iss and resources into the source directory
+          Copy-Item resources\innosetup.iss installer-src\ -Force
           Copy-Item -Recurse resources installer-src\resources -Force
           Get-ChildItem installer-src\*.exe
         shell: pwsh
@@ -352,7 +352,7 @@ jobs:
         run: |
           cd installer-src
           $verInfo = ($env:VERSION -split '\.')[0..2] -join '.'
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DMyAppVersion="$env:VERSION" /DMyArchSuffix="$env:ARCH" /DMyVersionInfoVersion="$verInfo" installer.iss
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DMyAppVersion="$env:VERSION" /DMyArchSuffix="$env:ARCH" /DMyVersionInfoVersion="$verInfo" innosetup.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem Output\*.exe
         shell: pwsh
@@ -380,7 +380,7 @@ jobs:
         arch: [amd64, arm64]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -460,7 +460,7 @@ jobs:
         arch: [amd64, arm64]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 

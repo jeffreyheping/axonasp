@@ -185,28 +185,30 @@ func (s *SymbolTable) Count() int {
 
 // Compiler handles single-pass compilation of VBScript tokens into VM bytecode.
 type Compiler struct {
-	lexer               *vbscript.Lexer
-	lexerMode           vbscript.LexerMode
-	sourceCode          string
-	next                vbscript.Token
-	tokenIndex          int
-	bytecode            []byte
-	constants           []Value
-	constantMap         map[string]int // Deduplication map: content→index, populated for VTString only
-	Globals             *SymbolTable
-	locals              *SymbolTable         // Current function scope
-	declaredGlobals     map[string]bool      // Variables declared via Dim in global scope
-	implicitGlobals     map[string]bool      // Variables implicitly created at page scope
-	declaredLocals      map[string]bool      // Variables declared via Dim in local scope
-	globalVarTypes      map[string]ValueType // VB6 As Type declarations for global variables (VTEmpty = Variant)
-	localVarTypes       map[string]ValueType // VB6 As Type declarations for local variables (VTEmpty = Variant)
-	globalRecordTypes   map[string]string    // UDT names for global variables
-	localRecordTypes    map[string]string    // UDT names for local variables
-	constGlobals        map[string]bool      // Constants declared via Const in global scope
-	constLocals         map[string]bool      // Constants declared via Const in local scope
-	staticLocals        map[string]int       // Static local variables mapping (localName -> globalIndex)
-	constLiteralGlobals map[string]Value     // Compile-time known global constant values
-	isLocal             bool                 // True if currently compiling a Sub/Function
+	lexer                *vbscript.Lexer
+	lexerMode            vbscript.LexerMode
+	sourceCode           string
+	next                 vbscript.Token
+	tokenIndex           int
+	bytecode             []byte
+	constants            []Value
+	constantMap          map[string]int // Deduplication map: content→index, populated for VTString only
+	Globals              *SymbolTable
+	locals               *SymbolTable                 // Current function scope
+	declaredGlobals      map[string]bool              // Variables declared via Dim in global scope
+	implicitGlobals      map[string]bool              // Variables implicitly created at page scope
+	declaredLocals       map[string]bool              // Variables declared via Dim in local scope
+	globalVarTypes       map[string]ValueType         // VB6 As Type declarations for global variables (VTEmpty = Variant)
+	localVarTypes        map[string]ValueType         // VB6 As Type declarations for local variables (VTEmpty = Variant)
+	globalRecordTypes    map[string]string            // UDT names for global variables
+	localRecordTypes     map[string]string            // UDT names for local variables
+	funcLocalTypes       map[int]map[string]ValueType // entryPoint -> localName -> type
+	funcLocalRecordTypes map[int]map[string]string    // entryPoint -> localName -> record/class name
+	constGlobals         map[string]bool              // Constants declared via Const in global scope
+	constLocals          map[string]bool              // Constants declared via Const in local scope
+	staticLocals         map[string]int               // Static local variables mapping (localName -> globalIndex)
+	constLiteralGlobals  map[string]Value             // Compile-time known global constant values
+	isLocal              bool                         // True if currently compiling a Sub/Function
 
 	// Compilation Options
 	optionExplicit         bool // Requires variables to be Dim'ed
@@ -237,6 +239,7 @@ type Compiler struct {
 	classDeclLookup     map[string]int
 	recordDecls         []CompiledRecordDecl
 	recordDeclLookup    map[string]int
+	enumTypeLookup      map[string]map[string]Value // Enum type name -> member name -> constant value
 	ObjectDeclarations  []*vbscript.ASPObjectToken
 	currentClassName    string
 	currentFunctionName string
@@ -334,6 +337,17 @@ func (c *Compiler) lastEmittedUDTNameFromOp() (string, bool) {
 				return udt, true
 			}
 		}
+	case OpGetClassMember:
+		if idx >= 0 && idx < len(c.constants) {
+			fieldName := strings.ToLower(c.constants[idx].Str)
+			if c.currentClassName != "" {
+				if field, ok := c.getClassFieldDeclaration(c.currentClassName, fieldName); ok {
+					if field.Type == VTRecord {
+						return field.ClassType, true
+					}
+				}
+			}
+		}
 	}
 	return "", false
 }
@@ -411,11 +425,14 @@ type CompiledClassFieldDecl struct {
 	Name       string
 	IsPublic   bool
 	WithEvents bool
+	Type       ValueType
+	ClassType  string
 }
 
 // CompiledClassEventDecl stores one compiled class event metadata entry.
 type CompiledClassEventDecl struct {
-	Name string
+	Name       string
+	ParamCount int // number of formal parameters declared for this event
 }
 
 // CompiledClassMethodDecl stores one compiled class method metadata entry.
@@ -477,6 +494,25 @@ func (c *Compiler) hasClassFieldDeclaration(className string, fieldName string) 
 		}
 	}
 	return false
+}
+
+// getClassFieldDeclaration finds one class field metadata entry by field name.
+func (c *Compiler) getClassFieldDeclaration(className string, fieldName string) (*CompiledClassFieldDecl, bool) {
+	if c == nil {
+		return nil, false
+	}
+	lowerClassName := strings.ToLower(strings.TrimSpace(className))
+	classIdx, exists := c.classDeclLookup[lowerClassName]
+	if !exists || classIdx < 0 || classIdx >= len(c.classDecls) {
+		return nil, false
+	}
+	trimmedFieldName := strings.TrimSpace(fieldName)
+	for i := range c.classDecls[classIdx].Fields {
+		if strings.EqualFold(c.classDecls[classIdx].Fields[i].Name, trimmedFieldName) {
+			return &c.classDecls[classIdx].Fields[i], true
+		}
+	}
+	return nil, false
 }
 
 // addClassEventDeclaration attaches one class event metadata entry to one class declaration.
@@ -688,6 +724,8 @@ func createCompiler(code string, mode vbscript.LexerMode) *Compiler {
 		localVarTypes:          make(map[string]ValueType),
 		globalRecordTypes:      make(map[string]string),
 		localRecordTypes:       make(map[string]string),
+		funcLocalTypes:         make(map[int]map[string]ValueType),
+		funcLocalRecordTypes:   make(map[int]map[string]string),
 		constGlobals:           make(map[string]bool),
 		constLocals:            make(map[string]bool),
 		staticLocals:           make(map[string]int),
@@ -709,6 +747,7 @@ func createCompiler(code string, mode vbscript.LexerMode) *Compiler {
 		classDeclLookup:        make(map[string]int),
 		recordDecls:            make([]CompiledRecordDecl, 0),
 		recordDeclLookup:       make(map[string]int),
+		enumTypeLookup:         make(map[string]map[string]Value),
 		loopContexts:           make([]loopContext, 0),
 		jsStrictMode:           false,
 		jsFunctionStrictModes:  make(map[int]bool),
@@ -1914,6 +1953,106 @@ func (c *Compiler) prebindTopLevelDimDeclarations() {
 	}
 }
 
+// preRegisterTypeDeclarations scans the token stream with a cloned lexer for
+// top-level Type...End Type blocks and pre-registers the UDT names in
+// recordDeclLookup. This must run BEFORE prebindTopLevelDimDeclarations (which
+// consumes the token stream) so that UDT names are in recordDeclLookup when
+// Class declarations that reference them are compiled during the definition
+// pre-binding pass.
+func (c *Compiler) preRegisterTypeDeclarations() {
+	if c == nil || c.lexer == nil {
+		return
+	}
+	scan := *c.lexer
+
+	for {
+		tok := scan.NextToken()
+		if tok == nil {
+			return
+		}
+		if _, ok := tok.(*vbscript.EOFToken); ok {
+			return
+		}
+
+		// Only match "Type" when it is an identifier followed by another
+		// identifier (the type name) and then a newline — this is a type
+		// declaration, not a member access like "inStream.Type = 1".
+		name := ""
+		switch t := tok.(type) {
+		case *vbscript.IdentifierToken:
+			name = t.Name
+		case *vbscript.KeywordOrIdentifierToken:
+			name = t.Name
+		default:
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(name), "type") {
+			continue
+		}
+
+		// Peek at the next token to see if it's an identifier (type name).
+		nextTok := scan.NextToken()
+		if nextTok == nil {
+			return
+		}
+		nextName := ""
+		switch t := nextTok.(type) {
+		case *vbscript.IdentifierToken:
+			nextName = t.Name
+		case *vbscript.KeywordOrIdentifierToken:
+			nextName = t.Name
+		default:
+			continue
+		}
+		if nextName == "" {
+			continue
+		}
+
+		// Peek at the third token. If it's a line terminator or a member access
+		// (like "As"), we have a type declaration. If it's "=" or ".", this is
+		// an assignment or member access using "Type" as a variable name, not
+		// a type declaration.
+		thirdTok := scan.NextToken()
+		if thirdTok == nil {
+			return
+		}
+		if _, ok := thirdTok.(*vbscript.LineTerminationToken); ok {
+			// "Type Point" followed by newline — this is a type declaration.
+		} else if _, ok := thirdTok.(*vbscript.CommentToken); ok {
+			// "Type Point ' comment" — type declaration with comment.
+		} else if kwTok, ok := thirdTok.(*vbscript.KeywordOrIdentifierToken); ok {
+			if strings.EqualFold(strings.TrimSpace(kwTok.Name), "as") {
+				// "Type Point As ..." — not a type declaration, probably a
+				// variable declaration like "Dim x As TypeName".
+				continue
+			}
+		} else if punctTok, ok := thirdTok.(*vbscript.PunctuationToken); ok {
+			// If followed by "=" or ".", it's an assignment or member access.
+			if punctTok.Type == vbscript.PunctEqual || punctTok.Type == vbscript.PunctDot {
+				continue
+			}
+			// If followed by "(" it could be a function call "Type(...)".
+			if punctTok.Type == vbscript.PunctLParen {
+				continue
+			}
+		} else if _, ok := thirdTok.(*vbscript.LineTerminationToken); !ok {
+			// If third token is anything unexpected, skip to be safe.
+			continue
+		}
+
+		lowerTypeName := strings.ToLower(nextName)
+		if _, exists := c.recordDeclLookup[lowerTypeName]; exists {
+			continue
+		}
+
+		c.recordDeclLookup[lowerTypeName] = len(c.recordDecls)
+		c.recordDecls = append(c.recordDecls, CompiledRecordDecl{
+			Name:    nextName,
+			Members: nil, // Populated during actual compilation
+		})
+	}
+}
+
 // isGlobalDefinitionToken reports whether the current token starts a global declaration block.
 func (c *Compiler) isGlobalDefinitionToken(token vbscript.Token) bool {
 	if c == nil || token == nil || c.isEval {
@@ -2167,6 +2306,22 @@ func (c *Compiler) LocalVarTypes() map[string]ValueType {
 	out := make(map[string]ValueType, len(c.localVarTypes))
 	maps.Copy(out, c.localVarTypes)
 	return out
+}
+
+// FuncLocalTypes returns the accumulated function local types map.
+func (c *Compiler) FuncLocalTypes() map[int]map[string]ValueType {
+	if c == nil {
+		return nil
+	}
+	return c.funcLocalTypes
+}
+
+// FuncLocalRecordTypes returns the accumulated function local record/class types map.
+func (c *Compiler) FuncLocalRecordTypes() map[int]map[string]string {
+	if c == nil {
+		return nil
+	}
+	return c.funcLocalRecordTypes
 }
 
 // LocalRecordTypes returns a copy of the declared UDT/Class names for local variables.

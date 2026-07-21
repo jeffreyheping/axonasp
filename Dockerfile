@@ -35,7 +35,6 @@ RUN apk add --no-cache git
 
 # Cache dependency downloads separately from source
 COPY go.mod go.sum ./
-COPY third_party/go-disk-usage ./third_party/go-disk-usage/
 RUN go mod download
 
 # Copy source tree

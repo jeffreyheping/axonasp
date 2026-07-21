@@ -27,12 +27,13 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"html/template"
 	"io"
+	"io/fs"
 	"log"
 	"mime"
 	"net"
@@ -48,12 +49,16 @@ import (
 	"strings"
 	"time"
 
+	"g3pix.com.br/axonasp/axonconfig"
+
 	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/disk"
 	"github.com/shirou/gopsutil/v3/host"
 	"github.com/shirou/gopsutil/v3/mem"
 	"github.com/shirou/gopsutil/v3/process"
 
 	"github.com/pelletier/go-toml/v2"
+	"github.com/spf13/pflag"
 )
 
 //go:embed www-interface/*
@@ -222,6 +227,7 @@ type FPMPoolConfig struct {
 	GID           uint32 `toml:"gid" comment:"Group ID used to run this worker process. It should match the permissions required by socket/tmp_dir and application files."`
 	Socket        string `toml:"socket" comment:"FastCGI listener endpoint for this pool. You can use a unix socket path, unix:/path form, host:port, or a plain TCP port."`
 	ConfigFile    string `toml:"config_file" comment:"Absolute path to the AxonASP configuration file used by this worker. The FPM supervisor controls the FastCGI endpoint, so fastcgi.server_port inside this file is ignored."`
+	GlobalAsaPath string `toml:"global_asa_path" comment:"Optional directory used to resolve global.asa for this pool. Prefer absolute paths in production to avoid path ambiguity."`
 	AppPath       string `toml:"app_path" comment:"Working directory (CWD) used when launching this worker process. It should point to the AxonASP application root."`
 	MemoryLimitMB int    `toml:"memory_limit_mb" comment:"Per-worker memory limit in MB. The supervisor can restart workers that exceed this value to protect host stability."`
 	MaxRestarts   int    `toml:"max_restarts" comment:"Maximum restart attempts for this worker pool. Set to 0 to disable the cap."`
@@ -245,7 +251,17 @@ type HomeTelemetry struct {
 	AvailableMemory    uint64             `json:"available_memory_bytes"`
 	UsedMemoryBytes    uint64             `json:"used_memory_bytes"`
 	UsedMemoryPercent  float64            `json:"used_memory_percent"`
+	DiskTotalBytes     uint64             `json:"disk_total_bytes"`
+	DiskFreeBytes      uint64             `json:"disk_free_bytes"`
+	TempDirPath        string             `json:"temp_dir_path"`
+	TempDirSizeBytes   uint64             `json:"temp_dir_size_bytes"`
+	TempDirSizeKnown   bool               `json:"temp_dir_size_known"`
+	WebRootPath        string             `json:"web_root_path"`
+	WebRootSizeBytes   uint64             `json:"web_root_size_bytes"`
+	WebRootSizeKnown   bool               `json:"web_root_size_known"`
 	ProcessStats       []ProcessTelemetry `json:"process_stats"`
+	ProcessTotalCount  int                `json:"process_total_count"`
+	ProcessTotalMemory uint64             `json:"process_total_memory"`
 	CollectionWarnings []string           `json:"collection_warnings"`
 }
 
@@ -270,6 +286,8 @@ type PageData struct {
 	ActiveSection Section
 	ResolvedPath  string
 	ActiveView    string
+	IsWindows     bool
+	IsGUIEnv      bool
 	FPMDir        string
 	FPMPools      []string
 	ActivePool    string
@@ -440,6 +458,7 @@ func NewDefaultFPMPoolConfig() FPMPoolConfig {
 		GID:           1001,
 		Socket:        "/var/run/axonasp/example.com.sock",
 		ConfigFile:    "/opt/axonasp/config/axonasp.toml",
+		GlobalAsaPath: "/opt/axonasp/www/",
 		AppPath:       "/opt/axonasp/",
 		MemoryLimitMB: 128,
 		MaxRestarts:   3,
@@ -635,8 +654,18 @@ func updateFPMField(cfg *FPMPoolConfig, fieldTomlName, strVal string) {
 }
 
 // collectHomeTelemetry gathers host memory/system details and monitored process stats.
-func collectHomeTelemetry() HomeTelemetry {
+func collectHomeTelemetry(resolvedConfigPath string) HomeTelemetry {
 	telemetry := HomeTelemetry{}
+	activeCfg := NewDefaultConfig()
+	if loadedCfg, err := loadActiveConfigForTelemetry(resolvedConfigPath); err == nil {
+		activeCfg = loadedCfg
+	} else {
+		telemetry.CollectionWarnings = append(telemetry.CollectionWarnings, "config read fallback to defaults: "+err.Error())
+	}
+
+	telemetry.TempDirPath = resolveConfigRelativePath(resolvedConfigPath, activeCfg.Global.TempDir)
+	telemetry.WebRootPath = resolveConfigRelativePath(resolvedConfigPath, activeCfg.Server.WebRoot)
+
 	hostName, err := os.Hostname()
 	if err == nil {
 		telemetry.HostName = hostName
@@ -671,6 +700,27 @@ func collectHomeTelemetry() HomeTelemetry {
 		telemetry.UsedMemoryPercent = vmStats.UsedPercent
 	} else {
 		telemetry.CollectionWarnings = append(telemetry.CollectionWarnings, "memory info unavailable: "+err.Error())
+	}
+
+	if usage, err := disk.Usage(diskUsageTarget(resolvedConfigPath)); err == nil {
+		telemetry.DiskTotalBytes = usage.Total
+		telemetry.DiskFreeBytes = usage.Free
+	} else {
+		telemetry.CollectionWarnings = append(telemetry.CollectionWarnings, "disk usage unavailable: "+err.Error())
+	}
+
+	if tempSize, err := directorySize(telemetry.TempDirPath); err == nil {
+		telemetry.TempDirSizeBytes = tempSize
+		telemetry.TempDirSizeKnown = true
+	} else {
+		telemetry.CollectionWarnings = append(telemetry.CollectionWarnings, "temp_dir size unavailable: "+err.Error())
+	}
+
+	if webRootSize, err := directorySize(telemetry.WebRootPath); err == nil {
+		telemetry.WebRootSizeBytes = webRootSize
+		telemetry.WebRootSizeKnown = true
+	} else {
+		telemetry.CollectionWarnings = append(telemetry.CollectionWarnings, "web_root size unavailable: "+err.Error())
 	}
 
 	targetMap := map[string]*ProcessTelemetry{
@@ -710,7 +760,112 @@ func collectHomeTelemetry() HomeTelemetry {
 		*targetMap["axonasp-cli"],
 	}
 
+	for _, processStat := range telemetry.ProcessStats {
+		telemetry.ProcessTotalCount += processStat.Count
+		telemetry.ProcessTotalMemory += processStat.MemoryBytes
+	}
+
 	return telemetry
+}
+
+// loadActiveConfigForTelemetry loads the active TOML file used by the admin session.
+func loadActiveConfigForTelemetry(configPath string) (Config, error) {
+	cfg := NewDefaultConfig()
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return cfg, err
+	}
+	if err := toml.Unmarshal(data, &cfg); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+// resolveConfigRelativePath resolves a TOML path relative to the active config directory.
+func resolveConfigRelativePath(configPath, rawPath string) string {
+	trimmed := strings.TrimSpace(rawPath)
+	if trimmed == "" {
+		return ""
+	}
+	if filepath.IsAbs(trimmed) {
+		return filepath.Clean(trimmed)
+	}
+
+	// Match runtime behavior first: relative paths in config are effectively resolved from process CWD.
+	if cwd, err := os.Getwd(); err == nil && strings.TrimSpace(cwd) != "" {
+		candidate := filepath.Clean(filepath.Join(cwd, trimmed))
+		if _, statErr := os.Stat(candidate); statErr == nil {
+			return candidate
+		}
+	}
+
+	// Secondary fallback: resolve from admin executable directory.
+	execCandidate := filepath.Clean(filepath.Join(getAdminExecutableDir(), trimmed))
+	if _, err := os.Stat(execCandidate); err == nil {
+		return execCandidate
+	}
+
+	// Last resort: resolve from active config file directory.
+	baseDir := filepath.Dir(configPath)
+	return filepath.Clean(filepath.Join(baseDir, trimmed))
+}
+
+// diskUsageTarget returns an OS-appropriate disk usage root for host telemetry.
+func diskUsageTarget(configPath string) string {
+	if runtime.GOOS == "windows" {
+		vol := filepath.VolumeName(configPath)
+		if vol == "" {
+			return "C:\\"
+		}
+		return vol + "\\"
+	}
+	return "/"
+}
+
+// directorySize computes a best-effort recursive directory byte size.
+func directorySize(dirPath string) (uint64, error) {
+	if strings.TrimSpace(dirPath) == "" {
+		return 0, fmt.Errorf("path is empty")
+	}
+	info, err := os.Stat(dirPath)
+	if err != nil {
+		return 0, err
+	}
+	if !info.IsDir() {
+		return uint64(info.Size()), nil
+	}
+
+	var total uint64
+	var firstErr error
+	walkErr := filepath.WalkDir(dirPath, func(_ string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if firstErr == nil {
+				firstErr = walkErr
+			}
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		entryInfo, entryErr := d.Info()
+		if entryErr != nil {
+			if firstErr == nil {
+				firstErr = entryErr
+			}
+			return nil
+		}
+		if entryInfo.Size() > 0 {
+			total += uint64(entryInfo.Size())
+		}
+		return nil
+	})
+	if walkErr != nil {
+		return total, walkErr
+	}
+	if firstErr != nil {
+		return total, firstErr
+	}
+	return total, nil
 }
 
 // formatBytes returns a user-facing memory size string from bytes.
@@ -774,23 +929,177 @@ func findManagedProcesses(processName string) ([]*process.Process, error) {
 	return matches, nil
 }
 
-// startManagedProcess starts one managed executable instance in detached mode.
-func startManagedProcess(processName string) error {
-	executablePath := resolveManagedExecutablePath(processName)
-	if _, err := os.Stat(executablePath); err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("executable not found: %s", executablePath)
-		}
-		return fmt.Errorf("unable to access executable: %w", err)
+// startManagedProcess starts one managed executable instance with optional CLI arguments.
+func startManagedProcess(processName, rawArgs string) error {
+	parsedArgs, err := parseCommandLineArgs(rawArgs)
+	if err != nil {
+		return fmt.Errorf("failed to parse parameters: %w", err)
 	}
 
-	cmd := exec.Command(executablePath)
+	executablePath := resolveManagedExecutablePath(processName)
+	if _, statErr := os.Stat(executablePath); statErr != nil {
+		if os.IsNotExist(statErr) {
+			return fmt.Errorf("executable not found: %s", executablePath)
+		}
+		return fmt.Errorf("unable to access executable: %w", statErr)
+	}
+
+	if processName == "axonasp-cli" {
+		if isGUIEnvironment() {
+			return startCLIProcessVisibleTerminal(executablePath, parsedArgs)
+		}
+		if len(parsedArgs) == 0 {
+			return fmt.Errorf("parameters are required for axonasp-cli in headless environments")
+		}
+	}
+
+	cmd := exec.Command(executablePath, parsedArgs...)
 	cmd.Dir = filepath.Dir(executablePath)
 	configureDetachedProcess(cmd)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start process %s: %w", processName, err)
 	}
 	return nil
+}
+
+// isGUIEnvironment determines whether the host can spawn a visible terminal window.
+func isGUIEnvironment() bool {
+	return runtime.GOOS == "windows" || runtime.GOOS == "darwin"
+}
+
+// startCLIProcessVisibleTerminal launches axonasp-cli in a visible terminal for GUI environments.
+func startCLIProcessVisibleTerminal(executablePath string, args []string) error {
+	switch runtime.GOOS {
+	case "windows":
+		cmd := exec.Command(executablePath, args...)
+		cmd.Dir = filepath.Dir(executablePath)
+		configureVisibleConsoleProcess(cmd)
+		if err := cmd.Start(); err != nil {
+			return fmt.Errorf("failed to start visible terminal: %w", err)
+		}
+		return nil
+	case "darwin":
+		var commandLine strings.Builder
+		commandLine.WriteString(shellQuoteForSh(executablePath))
+		for _, arg := range args {
+			commandLine.WriteString(" ")
+			commandLine.WriteString(shellQuoteForSh(arg))
+		}
+		script := fmt.Sprintf("tell application \"Terminal\" to do script %q", commandLine.String())
+		if err := exec.Command("osascript", "-e", script).Start(); err != nil {
+			return fmt.Errorf("failed to open Terminal.app: %w", err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("visible terminal mode unsupported on %s", runtime.GOOS)
+	}
+}
+
+// shellQuoteForSh quotes a single argument for POSIX shell command composition.
+func shellQuoteForSh(raw string) string {
+	if raw == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(raw, "'", "'\"'\"'") + "'"
+}
+
+// parseCommandLineArgs splits a shell-like argument string, preserving quoted values.
+func parseCommandLineArgs(input string) ([]string, error) {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return []string{}, nil
+	}
+
+	var args []string
+	var current strings.Builder
+	inSingleQuote := false
+	inDoubleQuote := false
+	escapeNext := false
+
+	for _, ch := range trimmed {
+		switch {
+		case escapeNext:
+			current.WriteRune(ch)
+			escapeNext = false
+		case ch == '\\':
+			escapeNext = true
+		case ch == '\'' && !inDoubleQuote:
+			inSingleQuote = !inSingleQuote
+		case ch == '"' && !inSingleQuote:
+			inDoubleQuote = !inDoubleQuote
+		case (ch == ' ' || ch == '\t') && !inSingleQuote && !inDoubleQuote:
+			if current.Len() > 0 {
+				args = append(args, current.String())
+				current.Reset()
+			}
+		default:
+			current.WriteRune(ch)
+		}
+	}
+
+	if escapeNext || inSingleQuote || inDoubleQuote {
+		return nil, fmt.Errorf("unterminated quoted argument")
+	}
+	if current.Len() > 0 {
+		args = append(args, current.String())
+	}
+	return args, nil
+}
+
+// getManagedProcessHelp returns help output from a managed executable for use in the parameters modal.
+func getManagedProcessHelp(processName string) (string, error) {
+	executablePath := resolveManagedExecutablePath(processName)
+	if _, err := os.Stat(executablePath); err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("executable not found: %s", executablePath)
+		}
+		return "", err
+	}
+
+	helpText, err := captureHelpOutput(executablePath, "-h")
+	if strings.TrimSpace(helpText) != "" {
+		return helpText, nil
+	}
+
+	helpTextAlt, altErr := captureHelpOutput(executablePath, "--help")
+	if strings.TrimSpace(helpTextAlt) != "" {
+		return helpTextAlt, nil
+	}
+
+	if err != nil {
+		return "", err
+	}
+	if altErr != nil {
+		return "", altErr
+	}
+	return "No help output was returned by this executable.", nil
+}
+
+// captureHelpOutput executes a managed executable help flag with timeout and returns combined output.
+func captureHelpOutput(executablePath, flagArg string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, executablePath, flagArg)
+	cmd.Dir = filepath.Dir(executablePath)
+	out, err := cmd.CombinedOutput()
+
+	outputText := strings.TrimSpace(string(out))
+	if len(outputText) > 18000 {
+		outputText = outputText[:18000] + "\n... (output truncated)"
+	}
+
+	if ctx.Err() == context.DeadlineExceeded {
+		if outputText != "" {
+			return outputText, nil
+		}
+		return "", fmt.Errorf("help command timed out")
+	}
+
+	if err != nil && outputText == "" {
+		return "", err
+	}
+	return outputText, nil
 }
 
 // stopManagedProcess terminates all running instances for a managed process family.
@@ -1018,23 +1327,31 @@ func main() {
 	var createPath string
 	var createFPMPath string
 	var noUI bool
-	var helpFlag bool
+	var aboutFlag bool
 
-	flag.StringVar(&editPath, "edit", "", "TOML target to edit")
-	flag.StringVar(&createPath, "create", "", "TOML target to create")
-	flag.StringVar(&createFPMPath, "create-fpm", "", "FPM pool target to create")
-	flag.BoolVar(&noUI, "noui", false, "headless creation mode")
-	flag.BoolVar(&helpFlag, "h", false, "show help menu")
+	pflag.StringVar(&editPath, "edit", "", "Path to an existing AxonASP TOML configuration file to open for editing in the web interface.")
+	pflag.StringVar(&createPath, "create", "", "Create a new default AxonASP TOML configuration file at the provided path and exit.")
+	pflag.StringVar(&createFPMPath, "create-fpm", "", "Create a new default AxonASP FPM pool .conf file at the provided path and exit.")
+	pflag.BoolVar(&noUI, "noui", false, "Run in headless mode for create operations without opening the browser interface.")
+	pflag.BoolVarP(&aboutFlag, "about", "a", false, "Print AxonASP product and licensing information, then exit.")
 
-	flag.Usage = func() {
-		printHelp()
+	pflag.Usage = func() {
+		fmt.Printf("G3pix ❖ AxonASP Configuration Manager %s\n", Version)
+		fmt.Println("Options available: ")
+		pflag.PrintDefaults()
+		fmt.Print("\nFor more information, visit: https://g3pix.com.br/axonasp/manual/\n")
 	}
 
-	flag.Parse()
+	pflag.Parse()
+
+	if aboutFlag {
+		fmt.Print(axonconfig.AboutG3pixAxonASP())
+		os.Exit(0)
+	}
 
 	// Handle extra non-flag arguments as unrecognized.
-	if helpFlag || flag.NArg() > 0 {
-		printHelp()
+	if pflag.NArg() > 0 {
+		pflag.Usage()
 		os.Exit(0)
 	}
 
@@ -1309,7 +1626,41 @@ func main() {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(collectHomeTelemetry())
+		_ = json.NewEncoder(w).Encode(collectHomeTelemetry(resolvedPath))
+	})
+
+	// API Endpoint: Return supported flags/help text for a managed process executable.
+	mux.HandleFunc("/api/process/flags", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		processName := strings.TrimSpace(r.URL.Query().Get("process_name"))
+		allowedProcesses := map[string]bool{
+			"axonasp-http":    true,
+			"axonasp-fastcgi": true,
+			"axonasp-fpm":     true,
+			"axonasp-service": true,
+			"axonasp-cli":     true,
+		}
+		if !allowedProcesses[processName] {
+			sendJSONError(w, "Unsupported process name")
+			return
+		}
+
+		helpText, err := getManagedProcessHelp(processName)
+		if err != nil {
+			sendJSONError(w, "Unable to read supported flags: "+err.Error())
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"status":    "ok",
+			"process":   processName,
+			"help_text": helpText,
+		})
 	})
 
 	// API Endpoint: Start/stop managed AxonASP processes from the dashboard.
@@ -1325,6 +1676,7 @@ func main() {
 
 		processName := strings.TrimSpace(r.FormValue("process_name"))
 		action := strings.TrimSpace(strings.ToLower(r.FormValue("action")))
+		rawArgs := strings.TrimSpace(r.FormValue("args"))
 
 		allowedProcesses := map[string]bool{
 			"axonasp-http":    true,
@@ -1338,14 +1690,23 @@ func main() {
 			return
 		}
 
+		if processName == "axonasp-fpm" && runtime.GOOS == "windows" {
+			sendJSONError(w, "axonasp-fpm is not supported on Windows")
+			return
+		}
+
 		var message string
 		switch action {
 		case "start":
-			if err := startManagedProcess(processName); err != nil {
+			if err := startManagedProcess(processName, rawArgs); err != nil {
 				sendJSONError(w, err.Error())
 				return
 			}
-			message = processName + " started successfully"
+			if rawArgs != "" {
+				message = processName + " started successfully with parameters"
+			} else {
+				message = processName + " started successfully"
+			}
 		case "stop":
 			stopped, err := stopManagedProcess(processName)
 			if err != nil {
@@ -1421,7 +1782,7 @@ func main() {
 
 		defaultCfg := NewDefaultConfig()
 		sections := getSections(currentCfg, defaultCfg)
-		telemetry := collectHomeTelemetry()
+		telemetry := collectHomeTelemetry(resolvedPath)
 
 		poolFiles, poolListErr := listFPMConfigFiles(fpmResolvedDir)
 		if poolListErr != nil {
@@ -1495,6 +1856,8 @@ func main() {
 			ActiveSection: activeSection,
 			ResolvedPath:  resolvedPath,
 			ActiveView:    activeView,
+			IsWindows:     runtime.GOOS == "windows",
+			IsGUIEnv:      isGUIEnvironment(),
 			FPMDir:        fpmResolvedDir,
 			FPMPools:      poolFiles,
 			ActivePool:    activePool,

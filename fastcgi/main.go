@@ -60,6 +60,8 @@ import (
 // FastCGI configuration values.
 var (
 	Version                       = "0.0.0.0"
+	PoolName                      = ""
+	LogPrefix                     = ""
 	ListenNetwork                 = "tcp"
 	ListenAddr                    = "127.0.0.1:9000"
 	RootDir                       = "./www"
@@ -89,6 +91,15 @@ var (
 	scriptCache                   *axonvm.ScriptCache
 )
 
+// buildLogPrefix creates the process log prefix used by all worker output.
+func buildLogPrefix(pid int, poolName string) string {
+	name := strings.TrimSpace(poolName)
+	if name == "" {
+		return fmt.Sprintf("[#%d] ", pid)
+	}
+	return fmt.Sprintf("[#%d] [%s] ", pid, name)
+}
+
 // init loads environment variables and applies TOML-based configuration through Viper.
 func init() {
 	_ = godotenv.Load()
@@ -99,6 +110,15 @@ func init() {
 
 // loadFastCGIConfig loads and applies fastcgi/global settings from config/axonasp.toml using Viper.
 func loadFastCGIConfig() {
+	var aboutFlag bool
+
+	pflag.Usage = func() {
+		fmt.Printf("G3pix ❖ AxonASP FastCGI %s\n", Version)
+		fmt.Println("Options available: ")
+		pflag.PrintDefaults()
+		fmt.Print("\nFor more information, visit: https://g3pix.com.br/axonasp/manual/\n")
+	}
+
 	if pflag.Lookup("config.config_file") == nil {
 		pflag.StringP("config.config_file", "c", "", "Path to the configuration file to use.")
 	}
@@ -111,8 +131,26 @@ func loadFastCGIConfig() {
 	if pflag.Lookup("global.temp_dir") == nil {
 		pflag.String("global.temp_dir", "", "Optional override for the global temporary directory used by FastCGI runtime files")
 	}
+	if pflag.Lookup("pool.name") == nil {
+		pflag.String("pool.name", "", "Optional pool name used for worker log identification")
+	}
+	if pflag.Lookup("server.web_root") == nil {
+		pflag.String("server.web_root", "", "Web root directory (overrides server.web_root from configuration file). When set via CLI by the FPM supervisor, this takes precedence over the TOML value.")
+	}
+	if pflag.Lookup("about") == nil {
+		pflag.BoolVarP(&aboutFlag, "about", "a", false, "Print AxonASP product and licensing information, then exit.")
+	}
 
 	pflag.Parse()
+	if aboutFlag {
+		fmt.Print(axonconfig.AboutG3pixAxonASP())
+		os.Exit(0)
+	}
+	if poolName, err := pflag.CommandLine.GetString("pool.name"); err == nil {
+		PoolName = strings.TrimSpace(poolName)
+	}
+	LogPrefix = buildLogPrefix(os.Getpid(), PoolName)
+	log.SetPrefix(LogPrefix)
 
 	if configPath, err := pflag.CommandLine.GetString("config.config_file"); err == nil && configPath != "" {
 		axonconfig.SetCustomConfigPath(configPath)
@@ -124,7 +162,7 @@ func loadFastCGIConfig() {
 		log.Printf("Warning: Failed to read configuration file, using defaults.\n")
 	}
 	axonconfig.EnableWatchIfConfigured(v, func(e fsnotify.Event) {
-		fmt.Println("Config file changed:", e.Name)
+		fmt.Printf("%sConfig file changed: %s\n", LogPrefix, e.Name)
 		DebugASP = v.GetBool("global.enable_asp_debugging")
 		axonvm.SetInternalErrorLogEnabled(v.GetBool("global.enable_error_log_file"))
 	})
@@ -364,7 +402,7 @@ func applyRuntimeSettings() {
 	os.Setenv("TZ", DefaultTimezone)
 	location, err := axonvm.ResolveTimezoneLocation(DefaultTimezone)
 	if err != nil {
-		fmt.Printf("Warning: Could not load timezone %s, using UTC: %v\n", DefaultTimezone, err)
+		fmt.Printf("%sWarning: Could not load timezone %s, using UTC: %v\n", LogPrefix, DefaultTimezone, err)
 		location = time.UTC
 	}
 	serverLocation = location
@@ -391,7 +429,7 @@ func normalizeExtensions(values []string) []string {
 }
 
 // resolveGlobalASARoot determines where global.asa should be loaded from at startup.
-// Precedence: explicit --config.global_asa, then server.web_root, then process CWD.
+// Precedence: explicit --config.global_asa, then process CWD, then server.web_root.
 func resolveGlobalASARoot() (string, bool, error) {
 	if GlobalASADirFlagSet {
 		dir := strings.TrimSpace(ConfiguredGlobalASADir)
@@ -412,35 +450,42 @@ func resolveGlobalASARoot() (string, bool, error) {
 		return dir, true, nil
 	}
 
-	seen := make(map[string]struct{}, 2)
-	candidates := make([]string, 0, 2)
-	if dir := strings.TrimSpace(ConfiguredWebRoot); dir != "" {
-		if _, ok := seen[dir]; !ok {
-			seen[dir] = struct{}{}
-			candidates = append(candidates, dir)
-		}
-	}
-	if cwd, err := os.Getwd(); err == nil {
-		if _, ok := seen[cwd]; !ok {
-			seen[cwd] = struct{}{}
-			candidates = append(candidates, cwd)
+	cwd, cwdErr := os.Getwd()
+	if cwdErr == nil {
+		globalASAPath := filepath.Join(cwd, "global.asa")
+		info, err := os.Stat(globalASAPath)
+		if err == nil {
+			if !info.IsDir() {
+				return cwd, true, nil
+			}
+		} else if !os.IsNotExist(err) {
+			fmt.Printf("%sWarning: Failed to inspect potential global.asa at %s: %v\n", LogPrefix, globalASAPath, err)
 		}
 	}
 
-	for _, dir := range candidates {
-		globalASAPath := filepath.Join(dir, "global.asa")
+	webRoot := strings.TrimSpace(ConfiguredWebRoot)
+	if webRoot != "" {
+		candidateDir := webRoot
+		if !filepath.IsAbs(webRoot) {
+			if cwdErr != nil {
+				return "", false, fmt.Errorf("failed to resolve relative server.web_root %q because current directory is unavailable: %w", webRoot, cwdErr)
+			}
+			candidateDir = filepath.Join(cwd, webRoot)
+		}
+
+		globalASAPath := filepath.Join(candidateDir, "global.asa")
 		info, err := os.Stat(globalASAPath)
 		if err != nil {
 			if os.IsNotExist(err) {
-				continue
+				return "", false, nil
 			}
-			fmt.Printf("Warning: Failed to inspect potential global.asa at %s: %v\n", globalASAPath, err)
-			continue
+			fmt.Printf("%sWarning: Failed to inspect potential global.asa at %s: %v\n", LogPrefix, globalASAPath, err)
+			return "", false, nil
 		}
 		if info.IsDir() {
-			continue
+			return "", false, nil
 		}
-		return dir, true, nil
+		return candidateDir, true, nil
 	}
 
 	return "", false, nil
@@ -491,8 +536,8 @@ func (d *dummyResponseWriter) WriteHeader(statusCode int)  {}
 
 // main starts the FastCGI listener and serves ASP requests.
 func main() {
-	fmt.Printf("G3pix ❖ AxonASP FastCGI %s\n", Version)
-	fmt.Print("\033]0;G3pix ❖ AxonASP FastCGI\007\033]11;#3b6ea5\007\033[1;37m")
+	fmt.Printf("%sG3pix ❖ AxonASP FastCGI %s\n", LogPrefix, Version)
+	//fmt.Printf("%s\033]0;G3pix ❖ AxonASP FastCGI\007\033]11;#3b6ea5\007\033[1;37m", LogPrefix)
 
 	if CleanupSessions {
 		cleanupSessionFiles()
@@ -536,25 +581,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Load and compile global.asa only when a concrete file location was found.
-	if shouldLoadGlobalASA {
-		fmt.Printf("Startup global.asa source directory: %s\n", globalASARoot)
-		if err := axonvm.GetGlobalASA().LoadAndCompile(globalASARoot, GetSharedApplication()); err != nil {
-			fmt.Printf("Warning: Failed to load global.asa: %v\n", err)
-		} else if axonvm.GetGlobalASA().IsLoaded() {
-			// Execute Application_OnStart using a dummy host
-			req, _ := http.NewRequest("GET", "http://localhost/", nil)
-			dummyHost := NewFastCGIHost(&dummyResponseWriter{}, req)
-			_ = axonvm.GetGlobalASA().ExecuteApplicationOnStart(dummyHost)
-		}
-	} else {
-		fmt.Printf("Startup global.asa not found in fallback locations (server.web_root/CWD); skipping global.asa execution.\n")
-	}
-
-	mux := http.NewServeMux()
-	RegisterG3AxonLiveEndpoint(mux)
-	mux.HandleFunc("/", fastCGIMiddleware(handleRequest))
-
+	// Bind the listener BEFORE executing Application_OnStart so the kernel
+	// queues incoming connections during initialization, preventing
+	// "Connection refused" (ECONNREFUSED) in the reverse proxy.
 	listener, err := prepareFastCGIListener(ListenNetwork, ListenAddr)
 	if err != nil {
 		axonvm.ReportInternalError(axonvm.ErrCouldNotListenOn, err, "FastCGI listener could not start.", ListenNetwork+"://"+ListenAddr, 0)
@@ -563,8 +592,27 @@ func main() {
 	defer listener.Close()
 	defer cleanupFastCGIListenerArtifact(ListenNetwork, ListenAddr)
 
-	fmt.Printf("FastCGI server started on: %s://%s\n", ListenNetwork, ListenAddr)
-	fmt.Printf("Root directory: %s\n", RootDir)
+	fmt.Printf("%sFastCGI server started on: %s://%s\n", LogPrefix, ListenNetwork, ListenAddr)
+	fmt.Printf("%sRoot directory: %s\n", LogPrefix, RootDir)
+
+	// Load and compile global.asa only when a concrete file location was found.
+	if shouldLoadGlobalASA {
+		fmt.Printf("%sglobal.asa source directory: %s\n", LogPrefix, globalASARoot)
+		if err := axonvm.GetGlobalASA().LoadAndCompile(globalASARoot, GetSharedApplication()); err != nil {
+			fmt.Printf("%sWarning: Failed to load global.asa: %v\n", LogPrefix, err)
+		} else if axonvm.GetGlobalASA().IsLoaded() {
+			// Execute Application_OnStart using a dummy host
+			req, _ := http.NewRequest("GET", "http://localhost/", nil)
+			dummyHost := NewFastCGIHost(&dummyResponseWriter{}, req)
+			_ = axonvm.GetGlobalASA().ExecuteApplicationOnStart(dummyHost)
+		}
+	} else {
+		fmt.Printf("%s!global.asa not found in fallback locations (CWD/server.web_root); skipping global.asa execution.\n", LogPrefix)
+	}
+
+	mux := http.NewServeMux()
+	RegisterG3AxonLiveEndpoint(mux)
+	mux.HandleFunc("/", fastCGIMiddleware(handleRequest))
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
@@ -580,7 +628,7 @@ func main() {
 	}()
 
 	<-stop
-	fmt.Println("\nShutting down server...")
+	fmt.Printf("%s\nShutting down server...\n", LogPrefix)
 
 	if axonvm.GetGlobalASA().IsLoaded() {
 		req, _ := http.NewRequest("GET", "http://localhost/", nil)
@@ -633,6 +681,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 	// DEBUG: Log all headers to understand FastCGI parameter passing format
 	fcgiParams := extractFastCGIParams(r)
 	if DebugASP {
+		log.Print("--- FastCGI Request Debug - This is activated by DebugASP configuration in configuration file ---\n")
 		log.Printf("Request: %s %s\n", r.Method, r.URL.Path)
 		log.Printf("All headers/params:\n")
 		for k, v := range fcgiParams {
@@ -643,6 +692,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 			}
 			log.Printf("  %s = %s\n", k, val)
 		}
+		log.Print("--- FastCGI Request Debug End ---\n")
 	}
 
 	// Extract FastCGI parameters from reverse proxy (nginx/Apache).

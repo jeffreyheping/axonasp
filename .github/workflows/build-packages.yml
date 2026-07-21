@@ -1,38 +1,51 @@
-# .github/workflows/build-packages.yml
-name: Build OS Packages
+# AxonASP Server - Build Packages Workflow
+#
+# Copyright (C) 2026 G3pix Ltda. All rights reserved.
+#
+# Developed by Lucas Guimarães - G3pix Ltda
+# Contact: https://g3pix.com.br
+# Project URL: https://g3pix.com.br/axonasp
+#
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+#
+# Attribution Notice:
+# If this software is used in other projects, the name "AxonASP Server"
+#  must be cited in the documentation or "About" section.
+# 
+# Contribution Policy:
+#  Modifications to the core source code of AxonASP Server must be
+#  made available under this same license terms.
+#  This code was contributed largely by @jeffreyheping 
+#  (https://github.com/jeffreyheping)
+#
+# Triggers:
+#   - Push of v* tag        → publishes :v1.2.3 + :1.2 + :1
+#   - Workflow dispatch      → allows manual triggering of the workflow
 
+name: Build OS Packages
 on:
   push:
     tags:
       - "v*.*.*"
   workflow_dispatch:
-  workflow_call:
-    # Allows nightly-build.yml to call this workflow on a different ref.
-    inputs:
-      ref:
-        description: 'Git ref (branch/tag) to build from; empty = use the event ref'
-        required: false
-        default: ''
-        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-
 jobs:
   prepare:
-    name: Prepare
+    name: Prepare Version
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.value }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.ref || github.ref }}
           fetch-depth: 0
-
       - name: Compute version string
         id: version
         run: |
@@ -56,19 +69,12 @@ jobs:
       matrix:
         include:
           - { goos: linux,   goarch: amd64 }
-          - { goos: linux,   goarch: arm64 }
-          - { goos: darwin,  goarch: amd64 }
           - { goos: darwin,  goarch: arm64 }
           - { goos: windows, goarch: amd64 }
-          - { goos: windows, goarch: arm64 }
           - { goos: freebsd, goarch: amd64 }
-          - { goos: freebsd, goarch: arm64 }
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref || github.ref }}
-          fetch-depth: 0
+        uses: actions/checkout@v5
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -77,9 +83,11 @@ jobs:
           cache: true
 
       - name: Install goversioninfo
+        if: matrix.goos == 'windows'
         run: go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest
 
       - name: Generate Windows resources
+        if: matrix.goos == 'windows'
         run: |
           export PATH=$PATH:$(go env GOPATH)/bin
           go generate ./...
@@ -105,18 +113,20 @@ jobs:
           build_one "axonasp-admin$EXT"     admin
           build_one "axonasp-service$EXT"   service
           build_one "axonasp-testsuite$EXT" testsuite
-          # fpm is a Unix process manager, not built for Windows
           if [ "${GOOS}" != "windows" ]; then build_one "axonasp-fpm" fpm; fi
 
-          echo "Built binaries:"
-          ls -la axonasp-*
+      - name: Remove test directory from www
+        run: rm -rf ./www/test/ || true
+
+      - name: Remove resources/website directory from www
+        run: |
+          rm -rf ./resources/website/ || true
+          rm -rf ./resources/web/ || true
+          rm -rf ./resources/old/ || true
 
       # ──────────────────────────────────────────────────────────────
-      # Linux: DEB / RPM / Alpine APK / Archlinux packages
+      # Linux: DEB / RPM / Alpine APK / Archlinux packages (x64 only)
       # ──────────────────────────────────────────────────────────────
-      - name: Remove test directory from www
-        if: matrix.goos == 'linux'
-        run: rm -rf ./www/test/ || true
 
       - name: Install nFPM
         if: matrix.goos == 'linux'
@@ -125,34 +135,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y nfpm
 
-      - name: Build Linux packages (.deb .rpm .apk .pkg.tar.zst)
+      - name: Build Linux packages
         if: matrix.goos == 'linux'
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
-          ARCH: ${{ matrix.goarch }}
         run: |
           for packager in deb rpm apk archlinux; do
-            echo ">>> Building ${packager} package for ${ARCH}"
             nfpm package --packager "${packager}" --target .
           done
-          ls -la *.deb *.rpm *.apk *.pkg.tar.zst
-
-      - name: Create Linux portable tarball (.tar.xz)
-        if: matrix.goos == 'linux'
-        env:
-          VERSION: ${{ needs.prepare.outputs.version }}
-          ARCH: ${{ matrix.goarch }}
-        run: |
-          STAGE="axonasp-linux-${ARCH}"
-          mkdir -p "${STAGE}"
-          cp axonasp-http axonasp-fastcgi axonasp-cli axonasp-mcp \
-             axonasp-admin axonasp-service axonasp-testsuite axonasp-fpm "${STAGE}/"
-          cp -r www config mcp LICENSE.txt LEGAL-DISCLAIMER.md global.asa "${STAGE}/"
-          tar -cJf "axonasp-linux-${VERSION}-${ARCH}.tar.xz" "${STAGE}/"
-          ls -la axonasp-linux-*.tar.xz
 
       # ──────────────────────────────────────────────────────────────
-      # Windows: portable zip
+      # Windows: portable zip (x64 only)
       # ──────────────────────────────────────────────────────────────
       - name: Create Windows portable zip
         if: matrix.goos == 'windows'
@@ -163,13 +156,13 @@ jobs:
           STAGE="axonasp-windows-${ARCH}"
           mkdir -p "${STAGE}"
           cp *.exe "${STAGE}/"
-          cp -r www config mcp LICENSE.txt LEGAL-DISCLAIMER.md global.asa \
+          cp -r www config fpm/fpm.d mcp resources LICENSE.txt \
+                LEGAL-DISCLAIMER.md global.asa \
                 iis-http.cmd install-service.ps1 uninstall-service.ps1 "${STAGE}/"
           zip -r "axonasp-windows-${VERSION}-${ARCH}.zip" "${STAGE}/"
-          ls -la axonasp-windows-*.zip
 
       # ──────────────────────────────────────────────────────────────
-      # macOS: portable zip
+      # macOS: portable zip (arm64 only)
       # ──────────────────────────────────────────────────────────────
       - name: Create macOS portable zip
         if: matrix.goos == 'darwin'
@@ -181,12 +174,12 @@ jobs:
           mkdir -p "${STAGE}"
           cp axonasp-http axonasp-fastcgi axonasp-cli axonasp-mcp \
              axonasp-admin axonasp-service axonasp-testsuite axonasp-fpm "${STAGE}/"
-          cp -r www config mcp LICENSE.txt LEGAL-DISCLAIMER.md global.asa "${STAGE}/"
+          cp -r www fpm/fpm.d config mcp resources LICENSE.txt \
+                LEGAL-DISCLAIMER.md global.asa "${STAGE}/"
           zip -r "axonasp-macos-${VERSION}-${ARCH}.zip" "${STAGE}/"
-          ls -la axonasp-macos-*.zip
 
       # ──────────────────────────────────────────────────────────────
-      # FreeBSD: portable tarball (.tar.xz)
+      # FreeBSD: portable tarball (.tar.xz) (x64 only)
       # ──────────────────────────────────────────────────────────────
       - name: Create FreeBSD portable tarball
         if: matrix.goos == 'freebsd'
@@ -198,9 +191,8 @@ jobs:
           mkdir -p "${STAGE}"
           cp axonasp-http axonasp-fastcgi axonasp-cli axonasp-mcp \
              axonasp-admin axonasp-service axonasp-testsuite axonasp-fpm "${STAGE}/"
-          cp -r www config mcp LICENSE.txt LEGAL-DISCLAIMER.md global.asa "${STAGE}/"
+          cp -r www config fpm/fpm.d resources mcp LICENSE.txt LEGAL-DISCLAIMER.md global.asa "${STAGE}/"
           tar -cJf "axonasp-freebsd-${VERSION}-${ARCH}.tar.xz" "${STAGE}/"
-          ls -la axonasp-freebsd-*.tar.xz
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -215,9 +207,6 @@ jobs:
             *.tar.xz
           if-no-files-found: error
 
-  # ──────────────────────────────────────────────────────────────
-  # WASM build (js/wasm) — separate because it has a single output
-  # ──────────────────────────────────────────────────────────────
   build-wasm:
     name: Build js/wasm
     needs: prepare
@@ -226,10 +215,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref || github.ref }}
-          fetch-depth: 0
+        uses: actions/checkout@v5
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -246,9 +232,7 @@ jobs:
         run: |
           set -e
           go build -trimpath -ldflags "-s -w -X main.Version=${FULL_VERSION}" -o wasm/axonasp.wasm ./wasm/main.go
-          # Bundle the official wasm_exec.js runtime shim from the toolchain
           cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" wasm/
-          ls -la wasm/axonasp.wasm wasm/wasm_exec.js
 
       - name: Create WASM zip
         env:
@@ -258,7 +242,6 @@ jobs:
           mkdir -p "${STAGE}"
           cp wasm/axonasp.wasm wasm/wasm_exec.js wasm/index.htm wasm/axonasp.css "${STAGE}/"
           zip -r "axonasp-wasm-${VERSION}.zip" "${STAGE}/"
-          ls -la axonasp-wasm-*.zip
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -267,112 +250,86 @@ jobs:
           path: "*.zip"
           if-no-files-found: error
 
-  # ──────────────────────────────────────────────────────────────
-  # Windows installer (Inno Setup) — runs on a Windows runner
-  # ──────────────────────────────────────────────────────────────
   build-windows-installer:
-    name: Build Windows installer ${{ matrix.arch }}
+    name: Build Windows installer amd64
     needs: [prepare, build]
     runs-on: windows-latest
     permissions:
       contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [amd64, arm64]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref || github.ref }}
-          fetch-depth: 0
+        uses: actions/checkout@v5
 
       - name: Download Windows binaries from build job
         uses: actions/download-artifact@v4
         with:
-          name: axonasp-windows-${{ matrix.arch }}
+          name: axonasp-windows-amd64
           path: .
 
       - name: Extract Windows zip
         run: |
           $zip = Get-ChildItem axonasp-windows-*.zip | Select-Object -First 1
           Expand-Archive -Path $zip.Name -DestinationPath . -Force
-          # Find the extracted subdirectory and rename it to 'installer-src'
           $subdir = Get-ChildItem -Directory | Where-Object { $_.Name -like "axonasp-windows-*" } | Select-Object -First 1
           if ($subdir) {
             Rename-Item -Path $subdir.FullName -NewName "installer-src"
           }
-          # Copy installer.iss and resources into the source directory
-          Copy-Item installer.iss installer-src\
+          # Copy innosetup.iss and resources into the source directory
+          Copy-Item resources\innosetup.iss installer-src\ -Force
           Copy-Item -Recurse resources installer-src\resources -Force
-          Get-ChildItem installer-src\*.exe
         shell: pwsh
 
       - name: Build installer with Inno Setup
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
-          ARCH: ${{ matrix.arch }}
+          ARCH: amd64
         run: |
           cd installer-src
           $verInfo = ($env:VERSION -split '\.')[0..2] -join '.'
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DMyAppVersion="$env:VERSION" /DMyArchSuffix="$env:ARCH" /DMyVersionInfoVersion="$verInfo" installer.iss
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DMyAppVersion="$env:VERSION" /DMyArchSuffix="$env:ARCH" /DMyVersionInfoVersion="$verInfo" innosetup.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Get-ChildItem Output\*.exe
         shell: pwsh
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: axonasp-installer-${{ matrix.arch }}
+          name: axonasp-installer-amd64
           path: installer-src\Output\*.exe
           if-no-files-found: error
 
-  # ──────────────────────────────────────────────────────────────
-  # macOS .pkg installer — runs on a macOS runner
-  # ──────────────────────────────────────────────────────────────
   build-macos-installer:
-    name: Build macOS pkg ${{ matrix.arch }}
+    name: Build macOS pkg arm64
     needs: [prepare, build]
     runs-on: macos-latest
     permissions:
       contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [amd64, arm64]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref || github.ref }}
-          fetch-depth: 0
+        uses: actions/checkout@v5
 
       - name: Download macOS binaries from build job
         uses: actions/download-artifact@v4
         with:
-          name: axonasp-darwin-${{ matrix.arch }}
+          name: axonasp-darwin-arm64
           path: .
 
       - name: Extract macOS zip
         run: |
           zip=$(ls axonasp-macos-*.zip | head -n1)
           unzip -q "$zip"
-          ls -la axonasp-macos-*/
 
       - name: Build .pkg installer
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
-          ARCH: ${{ matrix.arch }}
+          ARCH: arm64
         run: |
           set -e
           STAGE="axonasp-macos-${ARCH}"
           PKGROOT="pkgroot"
 
-          # Build payload tree under /opt/axonasp
           mkdir -p "${PKGROOT}/opt/axonasp"
           cp -R "${STAGE}/"* "${PKGROOT}/opt/axonasp/"
 
-          # Create postinstall script: symlink binaries to /usr/local/bin
           mkdir -p scripts
           cat > scripts/postinstall <<'SCRIPT'
           #!/bin/bash
@@ -389,7 +346,6 @@ jobs:
           SCRIPT
           chmod +x scripts/postinstall
 
-          # Package
           pkgbuild \
             --root "${PKGROOT}" \
             --identifier com.g3pix.axonasp \
@@ -397,123 +353,24 @@ jobs:
             --scripts scripts \
             --install-location / \
             "axonasp-macos-${VERSION}-${ARCH}.pkg"
-
-          ls -la *.pkg
-
-      - name: Upload pkg artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: axonasp-macos-pkg-${{ matrix.arch }}
-          path: "*.pkg"
-          if-no-files-found: error
-
-  # ──────────────────────────────────────────────────────────────
-  # FreeBSD .pkg installer — built via native Go tool on Linux
-  # ──────────────────────────────────────────────────────────────
-  build-freebsd-pkg:
-    name: Build FreeBSD pkg ${{ matrix.arch }}
-    needs: [prepare, build]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [amd64, arm64]
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref || github.ref }}
-          fetch-depth: 0
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Download FreeBSD tarball from build job
-        uses: actions/download-artifact@v4
-        with:
-          name: axonasp-freebsd-${{ matrix.arch }}
-          path: .
-
-      - name: Extract tarball and build .pkg
-        env:
-          VERSION: ${{ needs.prepare.outputs.version }}
-          ARCH: ${{ matrix.arch }}
-        run: |
-          set -e
-          tarball=$(ls -1 axonasp-freebsd-*.tar.xz | head -n1)
-          echo ">>> using $tarball"
-
-          STAGE=/tmp/axonasp-stage
-          rm -rf "$STAGE"
-          mkdir -p "$STAGE"
-          tar -xJf "$tarball" -C "$STAGE"
-
-          # Flatten: tarball contains axonasp-freebsd-<arch>/* → move to $STAGE/opt/axonasp/
-          SUBDIR=$(ls "$STAGE" | head -n1)
-          mkdir -p "$STAGE/opt/axonasp"
-          mv "$STAGE/$SUBDIR"/* "$STAGE/opt/axonasp/" 2>/dev/null || true
-          rm -rf "$STAGE/$SUBDIR"
-
-          # Build the pkg creator tool (now part of main module)
-          go build -o /tmp/freebsd-pkg ./tools/freebsd-pkg
-
-          # Architecture tag for FreeBSD pkg
-          if [ "${ARCH}" = "amd64" ]; then
-            FB_ARCH="FreeBSD:14:amd64"
+          if [ -f "/resources/icon.icns" ]; then
+              echo ">>> Apply custom icon to the .pkg file"
+              swift -e "import Cocoa; NSWorkspace.shared.setIcon(NSImage(contentsOfFile: \"/resources/icon.icns\"), forFile: \"axonasp-macos-${VERSION}-${ARCH}.pkg\", options: [])"
           else
-            FB_ARCH="FreeBSD:14:aarch64"
+              echo ">>> File ./resources/icon.icns not found to apply to the package."
           fi
 
-          # post-install script
-          POST_INSTALL=$(cat <<'EOF'
-          #!/bin/sh
-          for bin in axonasp-http axonasp-fastcgi axonasp-cli axonasp-mcp axonasp-admin axonasp-service axonasp-testsuite axonasp-fpm; do
-              if [ -f "/opt/axonasp/$bin" ]; then
-                  ln -sf "/opt/axonasp/$bin" "/usr/local/bin/$bin"
-              fi
-          done
-          EOF
-          )
-
-          DEINSTALL=$(cat <<'EOF'
-          #!/bin/sh
-          for bin in axonasp-http axonasp-fastcgi axonasp-cli axonasp-mcp axonasp-admin axonasp-service axonasp-testsuite axonasp-fpm; do
-              rm -f "/usr/local/bin/$bin"
-          done
-          EOF
-          )
-
-          /tmp/freebsd-pkg \
-            "axonasp-freebsd-${VERSION}-${ARCH}.pkg" \
-            axonasp \
-            "${VERSION}" \
-            "${FB_ARCH}" \
-            /opt/axonasp \
-            "$STAGE/opt/axonasp" \
-            "$POST_INSTALL" \
-            "$DEINSTALL"
-
-          ls -la *.pkg
-
       - name: Upload pkg artifact
         uses: actions/upload-artifact@v4
         with:
-          name: axonasp-freebsd-pkg-${{ matrix.arch }}
+          name: axonasp-macos-pkg-arm64
           path: "*.pkg"
           if-no-files-found: error
 
-  # ──────────────────────────────────────────────────────────────
-  # Publish everything to a GitHub Release (tag pushes only)
-  # ──────────────────────────────────────────────────────────────
   release:
-    name: Publish GitHub Release
-    needs: [build, build-wasm, build-windows-installer, build-macos-installer, build-freebsd-pkg]
-    if: startsWith(github.ref, 'refs/tags/v')
+    name: Publish to GitHub Releases
+    needs: [prepare, build, build-wasm, build-windows-installer, build-macos-installer]
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -523,19 +380,12 @@ jobs:
         with:
           path: artifacts
 
-      - name: List release assets
-        run: find artifacts -type f | sort
+      - name: Flatten artifacts for release
+        run: |
+          mkdir -p release-assets
+          find artifacts -type f \( -name "*.deb" -o -name "*.rpm" -o -name "*.apk" -o -name "*.pkg.tar.zst" -o -name "*.zip" -o -name "*.tar.xz" -o -name "*.pkg" -o -name "*.exe" \) -exec cp {} release-assets/ \;
 
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            artifacts/**/*.deb
-            artifacts/**/*.rpm
-            artifacts/**/*.apk
-            artifacts/**/*.pkg.tar.zst
-            artifacts/**/*.zip
-            artifacts/**/*.tar.xz
-            artifacts/**/*.pkg
-            artifacts/**/*installer*.exe
-
+          files: release-assets/*

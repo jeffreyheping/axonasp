@@ -104,6 +104,43 @@ func TestParseFastCGIListenEndpoint(t *testing.T) {
 	}
 }
 
+func TestBuildLogPrefix(t *testing.T) {
+	tests := []struct {
+		name     string
+		pid      int
+		poolName string
+		want     string
+	}{
+		{
+			name:     "standalone format without pool",
+			pid:      43191,
+			poolName: "",
+			want:     "[#43191] ",
+		},
+		{
+			name:     "fpm format with pool",
+			pid:      43191,
+			poolName: "testsite",
+			want:     "[#43191] [testsite] ",
+		},
+		{
+			name:     "pool whitespace is trimmed",
+			pid:      9,
+			poolName: "  pool-x  ",
+			want:     "[#9] [pool-x] ",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildLogPrefix(tt.pid, tt.poolName)
+			if got != tt.want {
+				t.Fatalf("prefix mismatch: got %q want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // chanListener is a single-use net.Listener backed by a channel of pre-created
 // net.Conns, allowing fcgi.Serve to be driven by an in-memory net.Pipe pair.
 type chanListener struct {
@@ -292,6 +329,156 @@ func TestFastCGIMiddlewareSetsPoweredByHeader(t *testing.T) {
 
 	if got := rec.Header().Get("X-Powered-By"); got != "AxonASP" {
 		t.Fatalf("expected X-Powered-By header AxonASP, got %q", got)
+	}
+}
+
+func TestResolveGlobalASARoot_PrefersCWDThenWebRoot(t *testing.T) {
+	originalWebRoot := ConfiguredWebRoot
+	originalGlobalASADir := ConfiguredGlobalASADir
+	originalFlagSet := GlobalASADirFlagSet
+	originalCWD, cwdErr := os.Getwd()
+	if cwdErr != nil {
+		t.Fatalf("failed to get current directory: %v", cwdErr)
+	}
+
+	tmpDir := t.TempDir()
+	cwdDir := filepath.Join(tmpDir, "cwd")
+	webRootDir := filepath.Join(tmpDir, "webroot")
+	if err := os.MkdirAll(cwdDir, 0755); err != nil {
+		t.Fatalf("failed to create cwd dir: %v", err)
+	}
+	if err := os.MkdirAll(webRootDir, 0755); err != nil {
+		t.Fatalf("failed to create webroot dir: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(cwdDir, "global.asa"), []byte("<% 'cwd' %>"), 0644); err != nil {
+		t.Fatalf("failed to write cwd global.asa: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(webRootDir, "global.asa"), []byte("<% 'webroot' %>"), 0644); err != nil {
+		t.Fatalf("failed to write webroot global.asa: %v", err)
+	}
+
+	if err := os.Chdir(cwdDir); err != nil {
+		t.Fatalf("failed to chdir: %v", err)
+	}
+
+	t.Cleanup(func() {
+		ConfiguredWebRoot = originalWebRoot
+		ConfiguredGlobalASADir = originalGlobalASADir
+		GlobalASADirFlagSet = originalFlagSet
+		_ = os.Chdir(originalCWD)
+	})
+
+	GlobalASADirFlagSet = false
+	ConfiguredGlobalASADir = ""
+	ConfiguredWebRoot = webRootDir
+
+	resolved, shouldLoad, err := resolveGlobalASARoot()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !shouldLoad {
+		t.Fatal("expected global.asa to be discovered")
+	}
+	if resolved != cwdDir {
+		t.Fatalf("expected CWD to win precedence, got %q want %q", resolved, cwdDir)
+	}
+}
+
+func TestResolveGlobalASARoot_UsesAbsoluteWebRootWithoutCWDPrefix(t *testing.T) {
+	originalWebRoot := ConfiguredWebRoot
+	originalGlobalASADir := ConfiguredGlobalASADir
+	originalFlagSet := GlobalASADirFlagSet
+	originalCWD, cwdErr := os.Getwd()
+	if cwdErr != nil {
+		t.Fatalf("failed to get current directory: %v", cwdErr)
+	}
+
+	tmpDir := t.TempDir()
+	cwdDir := filepath.Join(tmpDir, "cwd")
+	absoluteWebRoot := filepath.Join(tmpDir, "absolute-webroot")
+	if err := os.MkdirAll(cwdDir, 0755); err != nil {
+		t.Fatalf("failed to create cwd dir: %v", err)
+	}
+	if err := os.MkdirAll(absoluteWebRoot, 0755); err != nil {
+		t.Fatalf("failed to create absolute web_root dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(absoluteWebRoot, "global.asa"), []byte("<% 'absolute' %>"), 0644); err != nil {
+		t.Fatalf("failed to write absolute web_root global.asa: %v", err)
+	}
+
+	if err := os.Chdir(cwdDir); err != nil {
+		t.Fatalf("failed to chdir: %v", err)
+	}
+
+	t.Cleanup(func() {
+		ConfiguredWebRoot = originalWebRoot
+		ConfiguredGlobalASADir = originalGlobalASADir
+		GlobalASADirFlagSet = originalFlagSet
+		_ = os.Chdir(originalCWD)
+	})
+
+	GlobalASADirFlagSet = false
+	ConfiguredGlobalASADir = ""
+	ConfiguredWebRoot = absoluteWebRoot
+
+	resolved, shouldLoad, err := resolveGlobalASARoot()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !shouldLoad {
+		t.Fatal("expected global.asa to be discovered from absolute server.web_root")
+	}
+	if resolved != absoluteWebRoot {
+		t.Fatalf("expected absolute server.web_root path, got %q want %q", resolved, absoluteWebRoot)
+	}
+}
+
+func TestResolveGlobalASARoot_ResolvesRelativeWebRootFromCWD(t *testing.T) {
+	originalWebRoot := ConfiguredWebRoot
+	originalGlobalASADir := ConfiguredGlobalASADir
+	originalFlagSet := GlobalASADirFlagSet
+	originalCWD, cwdErr := os.Getwd()
+	if cwdErr != nil {
+		t.Fatalf("failed to get current directory: %v", cwdErr)
+	}
+
+	tmpDir := t.TempDir()
+	cwdDir := filepath.Join(tmpDir, "cwd")
+	relativeWebRoot := "site"
+	if err := os.MkdirAll(filepath.Join(cwdDir, relativeWebRoot), 0755); err != nil {
+		t.Fatalf("failed to create relative web_root dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cwdDir, relativeWebRoot, "global.asa"), []byte("<% 'relative' %>"), 0644); err != nil {
+		t.Fatalf("failed to write relative web_root global.asa: %v", err)
+	}
+
+	if err := os.Chdir(cwdDir); err != nil {
+		t.Fatalf("failed to chdir: %v", err)
+	}
+
+	t.Cleanup(func() {
+		ConfiguredWebRoot = originalWebRoot
+		ConfiguredGlobalASADir = originalGlobalASADir
+		GlobalASADirFlagSet = originalFlagSet
+		_ = os.Chdir(originalCWD)
+	})
+
+	GlobalASADirFlagSet = false
+	ConfiguredGlobalASADir = ""
+	ConfiguredWebRoot = relativeWebRoot
+
+	resolved, shouldLoad, err := resolveGlobalASARoot()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !shouldLoad {
+		t.Fatal("expected global.asa to be discovered from relative server.web_root")
+	}
+
+	expected := filepath.Join(cwdDir, relativeWebRoot)
+	if resolved != expected {
+		t.Fatalf("expected relative web_root to resolve from CWD, got %q want %q", resolved, expected)
 	}
 }
 

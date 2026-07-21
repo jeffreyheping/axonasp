@@ -80,6 +80,10 @@ Deploy AxonASP via its built-in HTTP server (Reverse Proxy Mode) or via FastCGI 
 
 See our full documentation in `www/manual/md/` for examples and complete API details.
 
+## 🌙 Nightly Releases
+
+Nightly releases are made available thanks to [@jeffreyheping](https://github.com/jeffreyheping) at the following address: [https://github.com/jeffreyheping/axonasp/releases](https://github.com/jeffreyheping/axonasp/releases). These builds are automatically generated once a day and reflect the most recent content from the repository. They are intended for testing and preview purposes only and **must not be used in production environments**. For the latest stable release, please refer to the official AxonASP releases [https://github.com/guimaraeslucas/axonasp/releases](https://github.com/guimaraeslucas/axonasp/releases).
+
 ## License 📝
 
 This project is licensed under the MPL 2.0 License - see the [LICENSE.txt](LICENSE.txt) file for details.

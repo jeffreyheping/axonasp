@@ -18,6 +18,7 @@
  * Modifications to the core source code of AxonASP Server must be
  * made available under this same license terms.
  */
+// Package axonconfig provides configuration management for AxonASP Server using Viper and also the AboutG3pixAxonASP function to provide information about the project.
 package axonconfig
 
 import (
@@ -99,4 +100,32 @@ func EnableWatchIfConfigured(v *viper.Viper, onChange func(fsnotify.Event)) bool
 	}
 	v.WatchConfig()
 	return true
+}
+
+// AboutG3pixAxonASP returns a string with information about AxonASP, including its license and copyright. It is intended to be displayed in the "About" section of applications using AxonASP, that's the reason it is not in the main package, but in the axonconfig package, so it can be imported and used by other packages.
+func AboutG3pixAxonASP() string {
+	return `
+G3pix ❖ AxonASP
+────────────────────────────
+
+The high-performance, cross-platform engine driving VBScript and JavaScript
+into the next era. Built on a zero-allocation VM for Web, FastCGI, and CLI,
+it bridges core logic with modern APIs across all systems. High-powered,
+open-source, and ready for the future.
+
+Contributing to AxonASP:
+As an open-source project, AxonASP relies on community support to remain 
+active. Maintenance and infrastructure costs are currently funded personally 
+by the lead developer. Your support—whether through code contributions, bug 
+reports, security patches, or financial donations—is vital to our continued 
+growth. Thank you for being part of our journey.
+
+License: 
+Mozilla Public License, v. 2.0.
+
+Copyright (C) 2026 G3pix Ltda. All rights reserved.
+https://g3pix.com.br/axonasp
+
+
+`
 }

@@ -1186,8 +1186,89 @@ func vbsAxonEnumValues(vm *VM, args []Value) (Value, error) {
 		return target, nil
 	}
 
-	if target.Type != VTNativeObject || vm == nil {
+	if target.Type != VTNativeObject && target.Type != VTObject || vm == nil {
 		return NewEmpty(), invalidEnumerable
+	}
+
+	if target.Type == VTObject {
+		instance, exists := vm.runtimeClassItems[target.Num]
+		if !exists || instance == nil {
+			return NewEmpty(), invalidEnumerable
+		}
+		classDef, exists := vm.runtimeClasses[strings.ToLower(strings.TrimSpace(instance.ClassName))]
+		if !exists {
+			return NewEmpty(), invalidEnumerable
+		}
+
+		hasNewEnum := false
+		memberName := ""
+		if _, ok := classDef.Properties["__newenum__"]; ok {
+			hasNewEnum = true
+			memberName = "__newenum__"
+		} else if _, ok := classDef.Methods["__newenum__"]; ok {
+			hasNewEnum = true
+			memberName = "__newenum__"
+		} else if _, ok := classDef.Properties["newenum"]; ok {
+			hasNewEnum = true
+			memberName = "newenum"
+		} else if _, ok := classDef.Methods["newenum"]; ok {
+			hasNewEnum = true
+			memberName = "newenum"
+		}
+
+		if !hasNewEnum {
+			if _, ok := classDef.Fields["newenum"]; ok {
+				hasNewEnum = true
+				memberName = "newenum"
+			}
+		}
+
+		if hasNewEnum {
+			var newEnumVal Value
+			if _, isField := classDef.Fields[memberName]; isField {
+				newEnumVal = instance.Members[memberName]
+			} else {
+				bytecode := []byte{
+					byte(OpConstant), 0, 0,
+					byte(OpConstant), 0, 1,
+					byte(OpMemberGet),
+				}
+				constants := []Value{
+					target,
+					NewString(memberName),
+				}
+				startIP := vm.appendExecuteProgram(0, constants, bytecode)
+				if startIP >= 0 && startIP < len(vm.bytecode) {
+					child := vm.cloneForExecuteLocal(startIP)
+					if err := child.Run(); err != nil {
+						vm.syncExecuteGlobalState(child)
+						return NewEmpty(), err
+					}
+					if child.sp >= 0 {
+						newEnumVal = child.stack[child.sp]
+					} else {
+						newEnumVal = NewEmpty()
+					}
+					vm.syncExecuteGlobalState(child)
+				} else {
+					newEnumVal = NewEmpty()
+				}
+			}
+			return vbsAxonEnumValues(vm, []Value{newEnumVal})
+		}
+		return NewEmpty(), invalidEnumerable
+	}
+
+	if col, ok := vm.collectionItems[target.Num]; ok && col != nil {
+		values := make([]Value, len(col.items))
+		copy(values, col.items)
+		return ValueFromVBArray(NewVBArrayFromValues(0, values)), nil
+	}
+
+	if colEnum, ok := vm.collectionEnumeratorItems[target.Num]; ok && colEnum != nil {
+		values := make([]Value, len(colEnum.items))
+		copy(values, colEnum.items)
+		return ValueFromVBArray(NewVBArrayFromValues(0, values)), nil
 	}
 
 	if target.Num == nativeObjectSessionContents {

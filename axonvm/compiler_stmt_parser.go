@@ -368,6 +368,110 @@ func (c *Compiler) parseStatement() {
 			c.parsePutStatement()
 		case vbscript.KeywordGet:
 			c.parseGetStatement()
+		case vbscript.KeywordMe:
+			c.move() // consume 'Me'
+			if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctDot {
+				c.emit(OpMe)
+				c.move() // consume '.'
+				memberName := c.expectIdentifier()
+
+				// Build member chain for multi-level access: Me.Obj.Prop
+				memberChain := []string{memberName}
+				for {
+					if dot, ok := c.next.(*vbscript.PunctuationToken); ok && dot.Type == vbscript.PunctDot {
+						c.move()
+						memberName = c.expectIdentifier()
+						memberChain = append(memberChain, memberName)
+						continue
+					}
+					break
+				}
+
+				flatMemberName := strings.Join(memberChain, ".")
+				callMemberName := flatMemberName
+				if len(memberChain) > 1 {
+					isAssignment := false
+					if peq, ok := c.next.(*vbscript.PunctuationToken); ok && peq.Type == vbscript.PunctEqual {
+						isAssignment = true
+					}
+					if !isAssignment {
+						for i := 0; i < len(memberChain)-1; i++ {
+							intermediateIdx := c.addConstant(NewString(memberChain[i]))
+							c.emit(OpConstant, intermediateIdx)
+							c.emit(OpMemberGet)
+						}
+						callMemberName = memberChain[len(memberChain)-1]
+					}
+				}
+
+				// Property assignment: Me.Prop = value
+				if peq, ok := c.next.(*vbscript.PunctuationToken); ok && peq.Type == vbscript.PunctEqual {
+					setMemberName := flatMemberName
+					if len(memberChain) > 1 {
+						for i := 0; i < len(memberChain)-1; i++ {
+							intermediateIdx := c.addConstant(NewString(memberChain[i]))
+							c.emit(OpConstant, intermediateIdx)
+							c.emit(OpMemberGet)
+						}
+						setMemberName = memberChain[len(memberChain)-1]
+					}
+					c.move() // Consume '='
+					c.parseExpression(PrecNone)
+					midx := c.addConstant(NewString(setMemberName))
+					c.emit(OpMemberSet, midx)
+				} else if lp, ok := c.next.(*vbscript.PunctuationToken); ok && lp.Type == vbscript.PunctLParen {
+					// Me.Method(args) or Me.Arr(index) or Me.Arr(index) = value
+					argCount := c.parseParenArgumentList()
+					midx := c.addConstant(NewString(callMemberName))
+					if peq, ok2 := c.next.(*vbscript.PunctuationToken); ok2 && peq.Type == vbscript.PunctEqual {
+						// Me.Arr(index) = value (array write)
+						c.move() // Consume '='
+						c.parseExpression(PrecNone)
+						c.emit(OpArraySet, midx, argCount)
+					} else if dot, ok2 := c.next.(*vbscript.PunctuationToken); ok2 && dot.Type == vbscript.PunctDot {
+						// Chained: Me.Method(args).Prop
+						c.emit(OpCallMember, midx, argCount)
+						if c.parseStatementCallChain() {
+							return
+						}
+						c.emit(OpPop)
+					} else {
+						c.emit(OpCallMember, midx, argCount)
+						c.emit(OpPop)
+					}
+				} else {
+					// Me.Prop arg1, arg2 (sub call without parens)
+					argCount := 0
+					if !c.isStatementEnd() {
+						for {
+							if comma, ok := c.next.(*vbscript.PunctuationToken); ok && comma.Type == vbscript.PunctComma {
+								emptyIdx := c.addConstant(NewEmpty())
+								c.emit(OpConstant, emptyIdx)
+							} else if c.isStatementEnd() {
+								emptyIdx := c.addConstant(NewEmpty())
+								c.emit(OpConstant, emptyIdx)
+							} else {
+								mscArgStartPos := len(c.bytecode)
+								c.parseExpression(PrecNone)
+								c.patchArgRefInBytecode(mscArgStartPos)
+							}
+							argCount++
+							if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctComma {
+								c.move()
+							} else {
+								break
+							}
+						}
+					}
+					midx := c.addConstant(NewString(callMemberName))
+					c.emit(OpCallMember, midx, argCount)
+					c.emit(OpPop)
+				}
+				return
+			}
+			// Not followed by '.' — fallback to expression parsing
+			c.parseExpression(PrecNone)
+			c.emit(OpPop)
 		default:
 			c.parseExpression(PrecNone)
 			c.emit(OpPop)
@@ -462,6 +566,28 @@ func (c *Compiler) parseStatement() {
 				c.emit(op, idx)
 				return
 			}
+
+			// Check if both LHS and RHS are UDTs
+			var isLHSUDT bool
+			if c.isLocal {
+				_, isLHSUDT = c.localRecordTypes[strings.ToLower(name)]
+				if !isLHSUDT {
+					_, isLHSUDT = c.globalRecordTypes[strings.ToLower(name)]
+				}
+			} else {
+				_, isLHSUDT = c.globalRecordTypes[strings.ToLower(name)]
+			}
+			if !isLHSUDT && c.currentClassName != "" {
+				if field, ok := c.getClassFieldDeclaration(c.currentClassName, name); ok && field.Type == VTRecord {
+					isLHSUDT = true
+				}
+			}
+
+			_, isRHSUDT := c.lastEmittedUDT()
+			if isLHSUDT && isRHSUDT {
+				c.emitExt(ExtOpCloneRecord)
+			}
+
 			// Plain "name = value" uses Let opcodes to preserve VBScript's
 			// non-Set assignment semantics while keeping variable-slot overwrites
 			// distinct from explicit object-reference Set assignments.
@@ -505,6 +631,28 @@ func (c *Compiler) parseStatement() {
 			if peq, ok := c.next.(*vbscript.PunctuationToken); ok && peq.Type == vbscript.PunctEqual {
 				c.move() // Consume '='
 				c.parseExpression(PrecNone)
+
+				// Check if both LHS and RHS are UDTs
+				var isLHSUDT bool
+				if c.isLocal {
+					_, isLHSUDT = c.localRecordTypes[strings.ToLower(name)]
+					if !isLHSUDT {
+						_, isLHSUDT = c.globalRecordTypes[strings.ToLower(name)]
+					}
+				} else {
+					_, isLHSUDT = c.globalRecordTypes[strings.ToLower(name)]
+				}
+				if !isLHSUDT && c.currentClassName != "" {
+					if field, ok := c.getClassFieldDeclaration(c.currentClassName, name); ok && field.Type == VTRecord {
+						isLHSUDT = true
+					}
+				}
+
+				_, isRHSUDT := c.lastEmittedUDT()
+				if isLHSUDT && isRHSUDT {
+					c.emitExt(ExtOpCloneRecord)
+				}
+
 				midx := c.addConstant(NewString(""))
 				c.emit(OpArraySet, midx, argCount)
 			} else {
@@ -562,10 +710,16 @@ func (c *Compiler) parseStatement() {
 				// Check if target is a known UDT to use fast ExtOpSetRecordMember
 				udtName, isUDT := c.lastEmittedUDTNameFromOp()
 				if isUDT && len(memberChain) == 1 {
-					memberIdx, _, _, found := c.getUDTMemberIndex(udtName, memberName)
+					memberIdx, memberType, _, found := c.getUDTMemberIndex(udtName, memberName)
 					if found {
 						c.move() // Consume '='
 						c.parseExpression(PrecNone)
+
+						_, isRHSUDT := c.lastEmittedUDT()
+						if memberType == VTRecord && isRHSUDT {
+							c.emitExt(ExtOpCloneRecord)
+						}
+
 						c.emitExt(ExtOpSetRecordMember, memberIdx)
 						return
 					}
@@ -1086,6 +1240,23 @@ func (c *Compiler) parseClassDeclaration() {
 			continue
 		}
 
+		hasDispIdMinus4 := false
+		if t, ok := c.next.(*vbscript.IdentifierToken); ok && strings.EqualFold(t.Name, "DispId(-4)") {
+			c.move()
+			hasDispIdMinus4 = true
+			for {
+				if _, ok := c.next.(*vbscript.LineTerminationToken); ok {
+					c.move()
+				} else if _, ok := c.next.(*vbscript.ColonLineTerminationToken); ok {
+					c.move()
+				} else if _, ok := c.next.(*vbscript.CommentToken); ok {
+					c.move()
+				} else {
+					break
+				}
+			}
+		}
+
 		isPublic := true
 		if c.checkKeyword(vbscript.KeywordPublic) {
 			c.move()
@@ -1102,24 +1273,28 @@ func (c *Compiler) parseClassDeclaration() {
 		}
 
 		if c.matchKeywordOrIdentifier(vbscript.KeywordSub, "sub") {
-			c.parseClassMethodDeclaration(className, false, isPublic, isDefaultMember)
+			c.parseClassMethodDeclaration(className, false, isPublic, isDefaultMember, hasDispIdMinus4)
 			continue
 		}
 		if c.checkKeyword(vbscript.KeywordDim) {
 			if isDefaultMember {
 				panic(c.vbCompileError(vbscript.ExpectedSub, "Default member must be a Sub, Function, or Property"))
 			}
+			if hasDispIdMinus4 {
+				panic(c.vbCompileError(vbscript.SyntaxError, "DispId(-4) is only supported on Properties or Functions/Subs"))
+			}
 			c.parseClassFieldDeclaration(className, true)
 			continue
 		}
 		if c.matchKeywordOrIdentifier(vbscript.KeywordFunction, "function") {
-			c.parseClassMethodDeclaration(className, true, isPublic, isDefaultMember)
+			c.parseClassMethodDeclaration(className, true, isPublic, isDefaultMember, hasDispIdMinus4)
 			continue
 		}
 		if c.matchKeywordOrIdentifier(vbscript.KeywordProperty, "property") {
-			c.parseClassPropertyDeclaration(className, isPublic, isDefaultMember)
+			c.parseClassPropertyDeclaration(className, isPublic, isDefaultMember, hasDispIdMinus4)
 			continue
 		}
+
 		if c.matchKeywordOrIdentifier(vbscript.KeywordEvent, "event") {
 			if isDefaultMember {
 				panic(c.vbCompileError(vbscript.ExpectedSub, "Events cannot be the default member of a class"))
@@ -1344,7 +1519,15 @@ func (c *Compiler) parseClassFieldDeclaration(className string, isPublic bool) {
 
 	for {
 		fieldName := c.expectIdentifier()
-		c.addClassFieldDeclaration(className, CompiledClassFieldDecl{Name: fieldName, IsPublic: isPublic, WithEvents: withEvents})
+		// Parse optional As Type clause.
+		declaredType, classType := c.parseAsTypeClause()
+		c.addClassFieldDeclaration(className, CompiledClassFieldDecl{
+			Name:       fieldName,
+			IsPublic:   isPublic,
+			WithEvents: withEvents,
+			Type:       declaredType,
+			ClassType:  classType,
+		})
 
 		classNameIdx := c.addConstant(NewString(className))
 		fieldNameIdx := c.addConstant(NewString(fieldName))
@@ -1352,7 +1535,17 @@ func (c *Compiler) parseClassFieldDeclaration(className string, isPublic bool) {
 		if isPublic {
 			isPublicOperand = 1
 		}
+
+		classTypeIdx := 0xFFFF
+		if classType != "" {
+			classTypeIdx = c.addConstant(NewString(classType))
+		}
+
 		c.emit(OpRegisterClassField, classNameIdx, fieldNameIdx, isPublicOperand)
+		c.bytecode = append(c.bytecode, byte(declaredType))
+		buf := make([]byte, 2)
+		binary.BigEndian.PutUint16(buf, uint16(classTypeIdx))
+		c.bytecode = append(c.bytecode, buf...)
 
 		if withEvents {
 			c.emitExt(ExtOpWithEventsRegister, classNameIdx, fieldNameIdx)
@@ -1433,6 +1626,8 @@ type procParamResult struct {
 	optionalMask  uint64
 	paramArrayIdx int   // index of ParamArray param, -1 if none
 	defaults      []int // constant pool indices for default values, -1 for params without defaults
+	types         []ValueType
+	udtNames      []string
 }
 
 // parseProcedureParameterNames parses Sub/Function formal parameter names and modifiers.
@@ -1506,14 +1701,8 @@ func (c *Compiler) parseProcedureParameterNames() procParamResult {
 
 		// Parse optional As Type clause.
 		declaredType, udtName := c.parseAsTypeClause()
-		if declaredType != VTEmpty {
-			// Record type declaration for the parameter in the local scope.
-			lower := strings.ToLower(paramName)
-			c.localVarTypes[lower] = declaredType
-			if declaredType == VTRecord {
-				c.localRecordTypes[lower] = udtName
-			}
-		}
+		result.types = append(result.types, declaredType)
+		result.udtNames = append(result.udtNames, udtName)
 
 		// Parse optional = DefaultValue for Optional parameters.
 		defaultIdx := -1
@@ -1583,7 +1772,7 @@ func (c *Compiler) extractDefaultConst() int {
 }
 
 // parseClassMethodDeclaration compiles one class Sub/Function body and registers runtime class method metadata.
-func (c *Compiler) parseClassMethodDeclaration(className string, isFunc bool, isPublic bool, isDefaultMember bool) {
+func (c *Compiler) parseClassMethodDeclaration(className string, isFunc bool, isPublic bool, isDefaultMember bool, hasDispIdMinus4 bool) {
 	if isFunc {
 		if c.matchKeywordOrIdentifier(vbscript.KeywordFunction, "function") {
 			c.move()
@@ -1600,6 +1789,11 @@ func (c *Compiler) parseClassMethodDeclaration(className string, isFunc bool, is
 
 	methodName := c.expectIdentifier()
 	paramResult := c.parseProcedureParameterNames()
+	var retType ValueType
+	var retUDTName string
+	if c.matchAsKeyword() {
+		retType, retUDTName = c.parseAsTypeClause()
+	}
 	if strings.EqualFold(methodName, "Class_Initialize") || strings.EqualFold(methodName, "Class_Terminate") {
 		if len(paramResult.names) != 0 {
 			panic(c.vbCompileError(vbscript.ClassInitializeOrTerminateDoNotHaveArguments, "Class_Initialize/Class_Terminate must not declare arguments"))
@@ -1628,6 +1822,8 @@ func (c *Compiler) parseClassMethodDeclaration(className string, isFunc bool, is
 	prevFunctionName := c.currentFunctionName
 	prevLabelMap := c.labelMap
 	prevForwardLabelPatches := c.forwardLabelPatches
+	prevLocalVarTypes := c.localVarTypes
+	prevLocalRecordTypes := c.localRecordTypes
 
 	c.isLocal = true
 	c.currentClassName = className
@@ -1635,22 +1831,47 @@ func (c *Compiler) parseClassMethodDeclaration(className string, isFunc bool, is
 	c.declaredLocals = make(map[string]bool)
 	c.constLocals = make(map[string]bool)
 	c.staticLocals = make(map[string]int)
+	c.localVarTypes = make(map[string]ValueType)
+	c.localRecordTypes = make(map[string]string)
 	c.labelMap = make(map[string]int)
 	c.forwardLabelPatches = make(map[string][]int)
 	c.currentFunctionName = methodName
 
-	for _, p := range paramResult.names {
+	for i, p := range paramResult.names {
 		c.locals.Add(p)
 		c.declaredLocals[strings.ToLower(p)] = true
+		if i < len(paramResult.types) && paramResult.types[i] != VTEmpty {
+			lower := strings.ToLower(p)
+			c.localVarTypes[lower] = paramResult.types[i]
+			if paramResult.types[i] == VTRecord || paramResult.types[i] == VTObject {
+				c.localRecordTypes[lower] = paramResult.udtNames[i]
+			}
+		}
 	}
 
 	returnIdx := -1
 	if isFunc {
 		returnIdx = c.locals.Add(methodName)
 		c.declaredLocals[strings.ToLower(methodName)] = true
+		if retType != VTEmpty {
+			lowerMethodName := strings.ToLower(methodName)
+			c.localVarTypes[lowerMethodName] = retType
+			if retType == VTRecord {
+				c.localRecordTypes[lowerMethodName] = retUDTName
+			}
+		}
 	}
 
 	c.hoistProcedureDimDeclarations(keywordFromBool(isFunc))
+
+	if isFunc && retType == VTRecord {
+		udtIdx, ok := c.recordDeclLookup[strings.ToLower(retUDTName)]
+		if ok {
+			c.emitExt(ExtOpInitRecord, udtIdx)
+			op, idx := c.resolveSetVar(methodName)
+			c.emit(OpSet, int(op), idx)
+		}
+	}
 
 	for !c.matchEof() {
 		if c.checkKeyword(vbscript.KeywordEnd) {
@@ -1687,6 +1908,8 @@ func (c *Compiler) parseClassMethodDeclaration(className string, isFunc bool, is
 	}
 
 	c.constants[placeholder] = NewUserSubEx(entryPoint, len(paramResult.names), c.locals.Count(), isFunc, paramResult.byRefMask, paramResult.optionalMask, paramResult.paramArrayIdx, c.locals.names)
+	c.funcLocalTypes[entryPoint] = c.localVarTypes
+	c.funcLocalRecordTypes[entryPoint] = c.localRecordTypes
 
 	if isFunc {
 		c.emit(OpGetLocal, returnIdx)
@@ -1709,6 +1932,10 @@ func (c *Compiler) parseClassMethodDeclaration(className string, isFunc bool, is
 		defaultNameIdx := c.addConstant(NewString("__default__"))
 		c.emit(OpRegisterClassMethod, classNameIdx, defaultNameIdx, placeholder, isPublicOperand)
 	}
+	if hasDispIdMinus4 {
+		newEnumNameIdx := c.addConstant(NewString("__newenum__"))
+		c.emit(OpRegisterClassMethod, classNameIdx, newEnumNameIdx, placeholder, isPublicOperand)
+	}
 
 	c.addClassMethodDeclaration(className, CompiledClassMethodDecl{
 		Name:           methodName,
@@ -1729,13 +1956,15 @@ func (c *Compiler) parseClassMethodDeclaration(className string, isFunc bool, is
 	c.declaredLocals = prevDeclared
 	c.constLocals = prevConstLocals
 	c.staticLocals = prevStaticLocals
+	c.localVarTypes = prevLocalVarTypes
+	c.localRecordTypes = prevLocalRecordTypes
 	c.currentFunctionName = prevFunctionName
 	c.labelMap = prevLabelMap
 	c.forwardLabelPatches = prevForwardLabelPatches
 }
 
 // parseClassPropertyDeclaration compiles one class Property Get/Let/Set body and validates signatures.
-func (c *Compiler) parseClassPropertyDeclaration(className string, isPublic bool, isDefaultMember bool) {
+func (c *Compiler) parseClassPropertyDeclaration(className string, isPublic bool, isDefaultMember bool, hasDispIdMinus4 bool) {
 	if c.matchKeywordOrIdentifier(vbscript.KeywordProperty, "property") {
 		c.move()
 	} else {
@@ -1760,6 +1989,11 @@ func (c *Compiler) parseClassPropertyDeclaration(className string, isPublic bool
 
 	propertyName := c.expectIdentifier()
 	paramResult := c.parseProcedureParameterNames()
+	var retType ValueType
+	var retUDTName string
+	if c.matchAsKeyword() {
+		retType, retUDTName = c.parseAsTypeClause()
+	}
 
 	if (accessorKind == classPropertyAccessorLet || accessorKind == classPropertyAccessorSet) && len(paramResult.names) == 0 {
 		panic(c.vbCompileError(vbscript.PropertySetOrLetMustHaveArguments, "Property Let/Set requires one value parameter"))
@@ -1787,6 +2021,8 @@ func (c *Compiler) parseClassPropertyDeclaration(className string, isPublic bool
 	prevFunctionName := c.currentFunctionName
 	prevLabelMap := c.labelMap
 	prevForwardLabelPatches := c.forwardLabelPatches
+	prevLocalVarTypes := c.localVarTypes
+	prevLocalRecordTypes := c.localRecordTypes
 
 	c.isLocal = true
 	c.currentClassName = className
@@ -1794,22 +2030,47 @@ func (c *Compiler) parseClassPropertyDeclaration(className string, isPublic bool
 	c.declaredLocals = make(map[string]bool)
 	c.constLocals = make(map[string]bool)
 	c.staticLocals = make(map[string]int)
+	c.localVarTypes = make(map[string]ValueType)
+	c.localRecordTypes = make(map[string]string)
 	c.labelMap = make(map[string]int)
 	c.forwardLabelPatches = make(map[string][]int)
 	c.currentFunctionName = propertyName
 
-	for _, p := range paramResult.names {
+	for i, p := range paramResult.names {
 		c.locals.Add(p)
 		c.declaredLocals[strings.ToLower(p)] = true
+		if i < len(paramResult.types) && paramResult.types[i] != VTEmpty {
+			lower := strings.ToLower(p)
+			c.localVarTypes[lower] = paramResult.types[i]
+			if paramResult.types[i] == VTRecord || paramResult.types[i] == VTObject {
+				c.localRecordTypes[lower] = paramResult.udtNames[i]
+			}
+		}
 	}
 
 	returnIdx := -1
 	if isFunction {
 		returnIdx = c.locals.Add(propertyName)
 		c.declaredLocals[strings.ToLower(propertyName)] = true
+		if retType != VTEmpty {
+			lowerName := strings.ToLower(propertyName)
+			c.localVarTypes[lowerName] = retType
+			if retType == VTRecord {
+				c.localRecordTypes[lowerName] = retUDTName
+			}
+		}
 	}
 
 	c.hoistProcedureDimDeclarations(vbscript.KeywordProperty)
+
+	if isFunction && retType == VTRecord {
+		udtIdx, ok := c.recordDeclLookup[strings.ToLower(retUDTName)]
+		if ok {
+			c.emitExt(ExtOpInitRecord, udtIdx)
+			op, idx := c.resolveSetVar(propertyName)
+			c.emit(OpSet, int(op), idx)
+		}
+	}
 
 	for !c.matchEof() {
 		if c.checkKeyword(vbscript.KeywordEnd) {
@@ -1832,6 +2093,8 @@ func (c *Compiler) parseClassPropertyDeclaration(className string, isPublic bool
 	}
 
 	c.constants[placeholder] = NewUserSubEx(entryPoint, len(paramResult.names), c.locals.Count(), isFunction, paramResult.byRefMask, paramResult.optionalMask, paramResult.paramArrayIdx, c.locals.names)
+	c.funcLocalTypes[entryPoint] = c.localVarTypes
+	c.funcLocalRecordTypes[entryPoint] = c.localRecordTypes
 
 	if isFunction {
 		c.emit(OpGetLocal, returnIdx)
@@ -1860,10 +2123,22 @@ func (c *Compiler) parseClassPropertyDeclaration(className string, isPublic bool
 	switch accessorKind {
 	case classPropertyAccessorGet:
 		c.emit(OpRegisterClassPropertyGet, classNameIdx, propertyNameIdx, placeholder, len(paramResult.names), isPublicOperand)
+		if hasDispIdMinus4 {
+			newEnumNameIdx := c.addConstant(NewString("__newenum__"))
+			c.emit(OpRegisterClassPropertyGet, classNameIdx, newEnumNameIdx, placeholder, len(paramResult.names), isPublicOperand)
+		}
 	case classPropertyAccessorLet:
 		c.emit(OpRegisterClassPropertyLet, classNameIdx, propertyNameIdx, placeholder, len(paramResult.names), isPublicOperand)
+		if hasDispIdMinus4 {
+			newEnumNameIdx := c.addConstant(NewString("__newenum__"))
+			c.emit(OpRegisterClassPropertyLet, classNameIdx, newEnumNameIdx, placeholder, len(paramResult.names), isPublicOperand)
+		}
 	case classPropertyAccessorSet:
 		c.emit(OpRegisterClassPropertySet, classNameIdx, propertyNameIdx, placeholder, len(paramResult.names), isPublicOperand)
+		if hasDispIdMinus4 {
+			newEnumNameIdx := c.addConstant(NewString("__newenum__"))
+			c.emit(OpRegisterClassPropertySet, classNameIdx, newEnumNameIdx, placeholder, len(paramResult.names), isPublicOperand)
+		}
 	}
 
 	if isDefaultMember {
@@ -1884,6 +2159,8 @@ func (c *Compiler) parseClassPropertyDeclaration(className string, isPublic bool
 	c.declaredLocals = prevDeclared
 	c.constLocals = prevConstLocals
 	c.staticLocals = prevStaticLocals
+	c.localVarTypes = prevLocalVarTypes
+	c.localRecordTypes = prevLocalRecordTypes
 	c.currentFunctionName = prevFunctionName
 	c.labelMap = prevLabelMap
 	c.forwardLabelPatches = prevForwardLabelPatches
@@ -2066,14 +2343,14 @@ func (c *Compiler) parseStaticStatement() {
 
 			if declaredType == VTRecord {
 				// emitTypedInit will handle the initialization
-				c.emitTypedInit(name, declaredType, udtName)
+				c.emitTypedInit(name, declaredType, udtName, isArray)
 			}
 
 			c.patchJump(jumpIfNotEmpty)
 
 			// Still call emitTypedInit to register the type mappings (without re-initializing record)
 			if declaredType != VTRecord {
-				c.emitTypedInit(name, declaredType, udtName)
+				c.emitTypedInit(name, declaredType, udtName, isArray)
 			}
 		}
 
@@ -2121,7 +2398,12 @@ func (c *Compiler) parseConstStatement() {
 // parseEnumStatement compiles Enum declarations as compile-time constants.
 func (c *Compiler) parseEnumStatement() {
 	c.expectKeyword(vbscript.KeywordEnum)
-	_ = c.expectIdentifier() // Enum name (ignored at runtime)
+	enumName := c.expectIdentifier() // Enum type name
+	enumLower := strings.ToLower(enumName)
+	// Create entry for this enum type in the lookup table.
+	if _, exists := c.enumTypeLookup[enumLower]; !exists {
+		c.enumTypeLookup[enumLower] = make(map[string]Value)
+	}
 	c.skipStatementEnd()
 
 	var currentValue int64 = 0
@@ -2166,8 +2448,11 @@ func (c *Compiler) parseEnumStatement() {
 			}
 		}
 
+		// Register the bare member name as a global constant (e.g., "Green").
 		c.constGlobals[lower] = true
 		c.constLiteralGlobals[lower] = NewInteger(currentValue)
+		// Also register under the enum type name prefix for EnumType.Member resolution.
+		c.enumTypeLookup[enumLower][lower] = NewInteger(currentValue)
 		currentValue++
 
 		c.skipStatementEnd()
@@ -2208,7 +2493,8 @@ func (c *Compiler) parseScopedVariableDeclaration() {
 		// Parse optional VB6 As Type clause.
 		declaredType, udtName := c.parseAsTypeClause()
 
-		if c.tryParseArrayDeclaration(name) {
+		isArray := c.tryParseArrayDeclaration(name)
+		if isArray {
 			if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctEqual {
 				panic(c.vbSyntaxError(vbscript.ExpectedEndOfStatement))
 			}
@@ -2219,7 +2505,7 @@ func (c *Compiler) parseScopedVariableDeclaration() {
 		}
 
 		// Emit type initialization opcode if As Type was specified.
-		c.emitTypedInit(name, declaredType, udtName)
+		c.emitTypedInit(name, declaredType, udtName, isArray)
 
 		if withEvents {
 			c.emitExt(ExtOpWithEventsRegister, 0xFFFF, c.addConstant(NewString(name)))
@@ -2281,6 +2567,10 @@ func (c *Compiler) parseAsTypeClause() (ValueType, string) {
 	if _, exists := c.recordDeclLookup[strings.ToLower(typeName)]; exists {
 		return VTRecord, typeName
 	}
+	// Check if it's an Enum type — Enum values are integers at runtime.
+	if _, exists := c.enumTypeLookup[strings.ToLower(typeName)]; exists {
+		return VTInteger, typeName
+	}
 	// Phase 5: Support Classes/Interfaces in As clause.
 	// Since we are single-pass, we might not have all classes declared yet.
 	// We'll treat any other identifier as an Object type (Class reference).
@@ -2288,7 +2578,7 @@ func (c *Compiler) parseAsTypeClause() (ValueType, string) {
 }
 
 // emitTypedInit records a VB6 As Type declaration for a variable in the compiler's type maps.
-func (c *Compiler) emitTypedInit(name string, declaredType ValueType, udtName string) {
+func (c *Compiler) emitTypedInit(name string, declaredType ValueType, udtName string, isArray bool) {
 	if declaredType == VTEmpty {
 		return // No type declaration, standard variant behavior
 	}
@@ -2321,7 +2611,7 @@ func (c *Compiler) emitTypedInit(name string, declaredType ValueType, udtName st
 	}
 
 	// If it's a UDT, we also need to emit an initialization opcode to allocate the record.
-	if declaredType == VTRecord {
+	if declaredType == VTRecord && !isArray {
 		udtIdx, ok := c.recordDeclLookup[strings.ToLower(udtName)]
 		if ok {
 			c.emitExt(ExtOpInitRecord, udtIdx)
@@ -2347,7 +2637,8 @@ func (c *Compiler) parseDimStatement() {
 		// Parse optional VB6 As Type clause.
 		declaredType, udtName := c.parseAsTypeClause()
 
-		if c.tryParseArrayDeclaration(name) {
+		isArray := c.tryParseArrayDeclaration(name)
+		if isArray {
 			if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctEqual {
 				panic(c.vbSyntaxError(vbscript.ExpectedEndOfStatement))
 			}
@@ -2358,7 +2649,7 @@ func (c *Compiler) parseDimStatement() {
 		}
 
 		// Emit type initialization opcode if As Type was specified.
-		c.emitTypedInit(name, declaredType, udtName)
+		c.emitTypedInit(name, declaredType, udtName, isArray)
 
 		if withEvents {
 			c.emitExt(ExtOpWithEventsRegister, 0xFFFF, c.addConstant(NewString(name)))
@@ -3398,6 +3689,11 @@ func (c *Compiler) parseSubFunction(isFunc bool) {
 
 	name := c.expectIdentifier()
 	paramResult := c.parseProcedureParameterNames()
+	var retType ValueType
+	var retUDTName string
+	if c.matchAsKeyword() {
+		retType, retUDTName = c.parseAsTypeClause()
+	}
 	if isFunc && len(paramResult.names) == 0 {
 		c.globalZeroArgFuncs[strings.ToLower(name)] = true
 	} else if !isFunc && len(paramResult.names) == 0 {
@@ -3439,28 +3735,55 @@ func (c *Compiler) parseSubFunction(isFunc bool) {
 	prevFunctionName := c.currentFunctionName
 	prevLabelMap := c.labelMap
 	prevForwardLabelPatches := c.forwardLabelPatches
+	prevLocalVarTypes := c.localVarTypes
+	prevLocalRecordTypes := c.localRecordTypes
 
 	c.isLocal = true
 	c.locals = NewSymbolTable()
 	c.declaredLocals = make(map[string]bool)
 	c.constLocals = make(map[string]bool)
 	c.staticLocals = make(map[string]int)
+	c.localVarTypes = make(map[string]ValueType)
+	c.localRecordTypes = make(map[string]string)
 	c.labelMap = make(map[string]int)
 	c.forwardLabelPatches = make(map[string][]int)
 	c.currentFunctionName = name
 
-	for _, p := range paramResult.names {
+	for i, p := range paramResult.names {
 		c.locals.Add(p)
 		c.declaredLocals[strings.ToLower(p)] = true
+		if i < len(paramResult.types) && paramResult.types[i] != VTEmpty {
+			lower := strings.ToLower(p)
+			c.localVarTypes[lower] = paramResult.types[i]
+			if paramResult.types[i] == VTRecord || paramResult.types[i] == VTObject {
+				c.localRecordTypes[lower] = paramResult.udtNames[i]
+			}
+		}
 	}
 
 	returnIdx := -1
 	if isFunc {
 		returnIdx = c.locals.Add(name)
 		c.declaredLocals[strings.ToLower(name)] = true
+		if retType != VTEmpty {
+			lowerName := strings.ToLower(name)
+			c.localVarTypes[lowerName] = retType
+			if retType == VTRecord {
+				c.localRecordTypes[lowerName] = retUDTName
+			}
+		}
 	}
 
 	c.hoistProcedureDimDeclarations(keywordFromBool(isFunc))
+
+	if isFunc && retType == VTRecord {
+		udtIdx, ok := c.recordDeclLookup[strings.ToLower(retUDTName)]
+		if ok {
+			c.emitExt(ExtOpInitRecord, udtIdx)
+			op, idx := c.resolveSetVar(name)
+			c.emit(OpSet, int(op), idx)
+		}
+	}
 
 	for !c.matchEof() {
 		if c.checkKeyword(vbscript.KeywordEnd) {
@@ -3477,6 +3800,8 @@ func (c *Compiler) parseSubFunction(isFunc bool) {
 	}
 
 	c.constants[placeholder] = NewUserSubEx(entryPoint, len(paramResult.names), c.locals.Count(), isFunc, paramResult.byRefMask, paramResult.optionalMask, paramResult.paramArrayIdx, c.locals.names)
+	c.funcLocalTypes[entryPoint] = c.localVarTypes
+	c.funcLocalRecordTypes[entryPoint] = c.localRecordTypes
 
 	if len(c.forwardLabelPatches) > 0 {
 		for label := range c.forwardLabelPatches {
@@ -3499,6 +3824,8 @@ func (c *Compiler) parseSubFunction(isFunc bool) {
 	c.declaredLocals = prevDeclared
 	c.constLocals = prevConstLocals
 	c.staticLocals = prevStaticLocals
+	c.localVarTypes = prevLocalVarTypes
+	c.localRecordTypes = prevLocalRecordTypes
 	c.currentFunctionName = prevFunctionName
 	c.labelMap = prevLabelMap
 	c.forwardLabelPatches = prevForwardLabelPatches
@@ -3781,13 +4108,24 @@ func (c *Compiler) parseTypeDeclaration() {
 	typeName := c.expectIdentifier()
 	lowerTypeName := strings.ToLower(typeName)
 
-	if _, exists := c.recordDeclLookup[lowerTypeName]; exists {
-		panic(c.vbCompileError(vbscript.SyntaxError, fmt.Sprintf("Type '%s' already defined", typeName)))
-	}
-
-	decl := CompiledRecordDecl{
-		Name:    typeName,
-		Members: make([]CompiledRecordMemberDecl, 0),
+	var decl CompiledRecordDecl
+	if existingIdx, exists := c.recordDeclLookup[lowerTypeName]; exists {
+		// If the type was pre-registered (by preRegisterTypeDeclarations),
+		// reuse the existing slot.
+		if existingIdx >= 0 && existingIdx < len(c.recordDecls) {
+			decl = c.recordDecls[existingIdx]
+			if decl.Members != nil {
+				panic(c.vbCompileError(vbscript.SyntaxError, fmt.Sprintf("Type '%s' already defined", typeName)))
+			}
+			decl.Members = make([]CompiledRecordMemberDecl, 0)
+		} else {
+			panic(c.vbCompileError(vbscript.SyntaxError, fmt.Sprintf("Type '%s' already defined", typeName)))
+		}
+	} else {
+		decl = CompiledRecordDecl{
+			Name:    typeName,
+			Members: make([]CompiledRecordMemberDecl, 0),
+		}
 	}
 
 	c.expectStatementEnd()
@@ -3818,8 +4156,13 @@ func (c *Compiler) parseTypeDeclaration() {
 		c.expectStatementEnd()
 	}
 
-	c.recordDeclLookup[lowerTypeName] = len(c.recordDecls)
-	c.recordDecls = append(c.recordDecls, decl)
+	if existingIdx, exists := c.recordDeclLookup[lowerTypeName]; exists && existingIdx < len(c.recordDecls) && c.recordDecls[existingIdx].Members == nil {
+		// Update the pre-registered placeholder.
+		c.recordDecls[existingIdx] = decl
+	} else {
+		c.recordDeclLookup[lowerTypeName] = len(c.recordDecls)
+		c.recordDecls = append(c.recordDecls, decl)
+	}
 }
 
 func (c *Compiler) parseResponseWriteFlatChain() int {
@@ -3843,33 +4186,14 @@ func (c *Compiler) parseClassEventDeclaration(className string) {
 	c.move() // consume "Event"
 	eventName := c.expectIdentifier()
 
-	// Events can have parameters in VB6, but for now we'll support empty signatures
-	// or just parse and ignore them to match compatibility if needed.
-	// Classic ASP usually doesn't have events, so we're adding this for VB6 modernization.
-	if p, ok := c.next.(*vbscript.PunctuationToken); ok && p.Type == vbscript.PunctLParen {
-		c.move()
-		// Parse parameter list but we don't strictly need it for dispatch yet
-		for {
-			if c.matchEof() {
-				break
-			}
-			if rp, ok2 := c.next.(*vbscript.PunctuationToken); ok2 && rp.Type == vbscript.PunctRParen {
-				break
-			}
-			c.move() // dummy skip for now
-			if comma, ok3 := c.next.(*vbscript.PunctuationToken); ok3 && comma.Type == vbscript.PunctComma {
-				c.move()
-				continue
-			}
-			break
-		}
-		if rp, ok := c.next.(*vbscript.PunctuationToken); !ok || rp.Type != vbscript.PunctRParen {
-			panic(c.vbCompileError(vbscript.SyntaxError, "Expected ')'"))
-		}
-		c.move()
-	}
+	// Parse parameter list with full support for ByVal/ByRef, Optional, and As Type clauses,
+	// reusing the same parsing logic as Sub/Function parameters.
+	paramResult := c.parseProcedureParameterNames()
 
-	c.addClassEventDeclaration(className, CompiledClassEventDecl{Name: eventName})
+	c.addClassEventDeclaration(className, CompiledClassEventDecl{
+		Name:       eventName,
+		ParamCount: len(paramResult.names),
+	})
 
 	classNameIdx := c.addConstant(NewString(className))
 	eventNameIdx := c.addConstant(NewString(eventName))

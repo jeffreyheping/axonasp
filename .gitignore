@@ -8,8 +8,8 @@
 
 # Build output
 build/
-
 *.wasm
+xcaddy.exe
 
 
 # Code coverage profiles and other test artifacts
@@ -51,8 +51,7 @@ go.work.sum
 .env
 
 #innosetup
-*.iss
-!installer.iss
+local_setup.iss
 
 # Editor/IDE
 .vscode/
