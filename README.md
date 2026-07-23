@@ -76,7 +76,7 @@ Use the provided build scripts to compile AxonASP for your target architecture:
 You can optionally disable specific libraries (e.g., `lib_g3crypto_disabled`) to create leaner binaries. See the manual for details.
 
 ### Deployment Architecture
-Deploy AxonASP via its built-in HTTP server (Reverse Proxy Mode) or via FastCGI (`axonasp-fastcgi`). It integrates flawlessly with Nginx and Apache. 
+Deploy AxonASP via its built-in HTTP server (Reverse Proxy Mode) or via FastCGI (`axonasp-fastcgi`). It integrates flawlessly with Nginx and Apache allowing you to serve Classic ASP applications in modern web environments. You can use the experimental Caddy module to run AxonASP directly inside Caddy server for a fully integrated experience without need for FastCGI.
 
 See our full documentation in `www/manual/md/` for examples and complete API details.
 

@@ -373,17 +373,6 @@ func (a *AxonASP) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 		path = "/"
 	}
 
-	logoPath := axonconfig.NewViper().GetString("axfunctions.ax_default_logo_path")
-	if logoPath != "" {
-		if _, err := os.Stat(logoPath); err == nil {
-			a.logger.Info("ServeHTTP: AxonASP logo image path exists", zap.String("path", logoPath))
-		} else {
-			a.logger.Warn("ServeHTTP: AxonASP logo image path does not exist", zap.String("path", logoPath), zap.Error(err))
-		}
-	} else {
-		a.logger.Info("ServeHTTP: AxonASP logo image path is empty")
-	}
-
 	webRoot := "."
 	if a.GlobalAsaPath != "" {
 		webRoot = filepath.Dir(a.GlobalAsaPath)
@@ -421,7 +410,6 @@ func (a *AxonASP) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 		return next.ServeHTTP(w, r)
 	}
 
-	w.Header().Set("Server", "AxonASP-Caddy")
 	w.Header().Set("X-Powered-By", "AxonASP")
 
 	single := newSingleHeaderResponseWriter(w, 0)
