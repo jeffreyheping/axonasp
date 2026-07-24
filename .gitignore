@@ -73,4 +73,7 @@ mcp/search-index/
 *.snp
 *.compiled
 /.qoder
-/axonhta/HTAtest
+
+# AxonHTA test apps - exclude runtime data
+/axonhta/HTAtest/*/temp/
+/axonhta/HTAtest/*/data/state.dat

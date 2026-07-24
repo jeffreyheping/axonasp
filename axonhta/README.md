@@ -150,19 +150,6 @@ A music player built with **HTMX + Alpine.js** on top of AxonHTA.
 - Playback state persistence (`data/state.dat`)
 - Dark theme UI with album artwork animation
 
-### HTAtest/aspMoreClassicMVC/
-
-An **ASP.NET MVC-style scaffold** written in pure VBScript, demonstrating how to achieve modern MVC patterns within classic ASP constraints.
-
-- MVC separation: Controllers / Models / Views with clear responsibilities
-- Front controller routing: `default.asp` dispatches by `controller` / `action`
-- ViewBag data passing via `Scripting.Dictionary`
-- TempData / flash messages via Session
-- Dependency injection: `DbHelper` created by Controller, injected into Model
-- Shared layout: `_layout_top.asp` + `_layout_bottom.asp` (≈ `_Layout.cshtml`)
-- Access database (`data/DB.mdb`) with `ADODB` connection
-- Includes a detailed gap analysis comparing VBScript/ASP Classic limitations vs modern MVC frameworks (15 items documented)
-
 ## Technical Details
 
 - **HTTP server**: Listens on a random port on `127.0.0.1` (not accessible externally).
