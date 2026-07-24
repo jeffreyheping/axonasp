@@ -237,6 +237,7 @@ type CallFrame struct {
 	savedOnResumeNext   bool             // On Error Resume Next state before entering this call frame; restored on OpRet.
 	savedSkipToNextStmt bool             // Per-statement Resume Next skip state before entering this call frame; restored on OpRet.
 	savedStmtSP         int              // Statement-start SP before entering this call frame; restored on OpRet.
+	throwObjectNotSet   bool             // If true, throws "Object variable not set" after returning
 }
 
 // RuntimeClassMethodDef stores one compiled class method runtime entry.
@@ -4269,18 +4270,56 @@ aspExecLoop:
 			classNameIdx := binary.BigEndian.Uint16(vm.bytecode[vm.ip:])
 			vm.ip += 2
 			instance := vm.newRuntimeClassInstance(vm.constants[classNameIdx].Str)
-			vm.push(instance)
+			
 			if instance.Type != VTObject {
+				vm.push(instance)
 				continue
 			}
+
+			isPrivateConstructor := false
+			classDef, exists := vm.runtimeClasses[strings.ToLower(strings.TrimSpace(instance.ClassName))]
+			if exists && classDef.Methods != nil {
+				if initMethod, ok := classDef.Methods["class_initialize"]; ok {
+					if !initMethod.IsPublic {
+						isPrivateConstructor = true
+					}
+				}
+			}
+
+			isInternal := false
+			if isPrivateConstructor {
+				if len(vm.callStack) > 0 {
+					callerFrame := vm.callStack[len(vm.callStack)-1]
+					if callerFrame.boundObj != 0 {
+						if callerInstance, ok := vm.runtimeClassItems[callerFrame.boundObj]; ok {
+							if strings.EqualFold(callerInstance.ClassName, instance.ClassName) {
+								isInternal = true
+							}
+						}
+					}
+				}
+			}
+
+			if isPrivateConstructor && !isInternal {
+				vm.push(Value{Type: VTEmpty})
+			} else {
+				vm.push(instance)
+			}
+
 			initializerTarget, ok := vm.resolveRuntimeClassMethod(instance, "Class_Initialize", false)
 			if ok {
 				if initializerTarget.UserSubParamCount() != 0 {
 					vm.raise(vbscript.ClassInitializeOrTerminateDoNotHaveArguments, "Class_Initialize must not declare arguments")
 				}
 				if vm.beginUserSubCall(initializerTarget, nil, true, instance.Num) {
+					if isPrivateConstructor && !isInternal {
+						vm.callStack[len(vm.callStack)-1].throwObjectNotSet = true
+					}
 					continue
 				}
+			} else if isPrivateConstructor && !isInternal {
+				vm.raise(vbscript.ObjectVariableNotSet, "Object variable or With block variable not set")
+				continue
 			}
 
 		case OpJSDeclareName:
@@ -5737,6 +5776,10 @@ aspExecLoop:
 			}
 			if !frame.discard {
 				vm.push(retVal)
+			}
+			if frame.throwObjectNotSet {
+				vm.raise(vbscript.ObjectVariableNotSet, "Object variable or With block variable not set")
+				continue
 			}
 
 		case OpSwap:
