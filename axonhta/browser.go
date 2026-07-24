@@ -105,6 +105,11 @@ func findChromiumBrowser() string {
 // the current application, so each app gets its own isolated profile and
 // always opens in a dedicated window instead of a tab in an existing
 // browser session.
+//
+// The profile is stored in a platform-appropriate persistent location:
+//   - Windows: %LOCALAPPDATA%/AxonHTA/<app>/
+//   - macOS:   ~/Library/Application Support/AxonHTA/<app>/
+//   - Linux:   ~/.local/share/axonhta/<app>/
 func appUserDataDir() string {
 	name := filepath.Base(appDir)
 	// Sanitize for use as a directory name across platforms.
@@ -116,7 +121,32 @@ func appUserDataDir() string {
 	if name == "" || name == "." || name == "-" {
 		name = "default"
 	}
-	return filepath.Join(os.TempDir(), "axonhta-"+name)
+
+	base := persistentDataDir()
+	return filepath.Join(base, name)
+}
+
+// persistentDataDir returns the platform-appropriate base directory for
+// persistent application data.
+func persistentDataDir() string {
+	switch runtime.GOOS {
+	case "windows":
+		if local := os.Getenv("LOCALAPPDATA"); local != "" {
+			return filepath.Join(local, "AxonHTA")
+		}
+		// Fallback if LOCALAPPDATA is not set.
+		return filepath.Join(os.TempDir(), "axonhta")
+	case "darwin":
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, "Library", "Application Support", "AxonHTA")
+	default:
+		// XDG_DATA_HOME or ~/.local/share
+		if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+			return filepath.Join(xdg, "axonhta")
+		}
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, ".local", "share", "axonhta")
+	}
 }
 
 // waitForInterrupt blocks until the process receives an interrupt or
@@ -147,13 +177,20 @@ func openAppWindow(browserPath, url string) {
 
 		// Minimal desktop-app experience: disable browser features
 		// that are unnecessary in app mode.
-		"--disable-extensions",                       // No extensions
 		"--disable-translate",                        // No translate bar
 		"--disable-sync",                             // No account sync
 		"--disable-default-apps",                     // No default apps prompt
 		"--disable-component-update",                 // No background component updates
 		"--disable-background-networking",            // Minimize background network activity
 		"--autoplay-policy=no-user-gesture-required", // Allow media autoplay
+	}
+
+	if devMode {
+		// In dev mode, keep extensions and enable DevTools.
+		args = append(args, "--auto-open-devtools-for-tabs")
+	} else {
+		// Production: disable extensions for a cleaner desktop feel.
+		args = append(args, "--disable-extensions")
 	}
 
 	// Apply HTA tag attributes if available.
@@ -199,18 +236,20 @@ func openAppWindow(browserPath, url string) {
 
 	// If heartbeats were received, Chrome forked — the launcher exited
 	// but the browser window is still open. Block here; the heartbeat
-	// monitor will call os.Exit when the window is closed.
+	// monitor will call shutdown() when the window is closed.
 	if lastHeartbeat.Load() > 0 {
-		select {} // block forever; heartbeat monitor handles exit
+		waitForInterrupt()
+		shutdown()
+		return
 	}
 
 	// No heartbeats ever received — browser didn't start or crashed.
-	log.Println("Shutting down AxonHTA...")
+	shutdown()
 }
 
 // monitorHeartbeat waits for the first heartbeat from the browser page,
 // then polls until heartbeats stop, indicating the window was closed.
-// When that happens it calls os.Exit(0) to shut down axonhta.exe.
+// When that happens it calls shutdown() to gracefully exit.
 func monitorHeartbeat() {
 	// Wait for first heartbeat (60s timeout for slow page loads).
 	deadline := time.Now().Add(60 * time.Second)
@@ -223,21 +262,23 @@ func monitorHeartbeat() {
 
 	if lastHeartbeat.Load() == 0 {
 		log.Println("No heartbeat received from browser, shutting down...")
-		os.Exit(1)
+		shutdown()
+		return
 	}
 
-	// Poll until heartbeats stop (15s grace period covers form-submission
+	// Poll until heartbeats stop (grace period covers form-submission
 	// navigation gaps: when the browser submits a POST and follows a 302
 	// redirect, the old page's JS stops and the new page's JS hasn't started
 	// yet. With a 5-second heartbeat interval, the worst-case gap before the
 	// new page sends its first heartbeat can approach 10 seconds.
-	// 15 seconds provides a safe margin without delaying window-close
+	// heartbeatTimeoutSec provides a safe margin without delaying window-close
 	// detection excessively.
 	for {
 		last := lastHeartbeat.Load()
-		if time.Now().Unix()-last > 15 {
+		if time.Now().Unix()-last > heartbeatTimeoutSec {
 			log.Println("Browser window closed, shutting down...")
-			os.Exit(0)
+			shutdown()
+			return
 		}
 		time.Sleep(2 * time.Second)
 	}
@@ -273,5 +314,5 @@ func openDefaultBrowser(url string) {
 
 	waitForInterrupt()
 
-	log.Println("Shutting down AxonHTA...")
+	shutdown()
 }

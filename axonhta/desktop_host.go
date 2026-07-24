@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 
@@ -81,7 +82,7 @@ func (h *DesktopHost) WriteString(s string) {
 	h.response.Write(s)
 }
 
-func (h *DesktopHost) ExecuteASPFile(absPath string) error {
+func (h *DesktopHost) ExecuteASPFile(absPath string) (retErr error) {
 	previousRequestPath := h.server.GetRequestPath()
 	h.server.SetRequestPath(h.server.VirtualPathFromAbsolutePath(absPath))
 	defer h.server.SetRequestPath(previousRequestPath)
@@ -95,8 +96,31 @@ func (h *DesktopHost) ExecuteASPFile(absPath string) error {
 
 	vm := axonvm.AcquireVMFromCachedProgram(program)
 	vm.SetHost(h)
-	defer vm.Release()
-	return vm.Run()
+
+	// Protect vm.Run() and vm.Release() with panic recovery so a panic
+	// in a nested Server.Execute call does not crash the process.
+	type vmResult struct{ err error }
+	done := make(chan vmResult, 1)
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				done <- vmResult{err: fmt.Errorf("panic recovered in ExecuteASPFile VM goroutine: %v", rec)}
+			}
+		}()
+		defer vm.Release()
+		runErr := func() (err error) {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					err = fmt.Errorf("panic recovered in ExecuteASPFile vm.Run: %v", recovered)
+				}
+			}()
+			return vm.Run()
+		}()
+		done <- vmResult{err: runErr}
+	}()
+
+	res := <-done
+	return res.err
 }
 
 func (h *DesktopHost) PersistSession() {

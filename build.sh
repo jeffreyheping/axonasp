@@ -144,6 +144,10 @@ build_binary() {
 
     local output_file="${output_name}${extension}"
     local ldflags="-X main.Version=$FULL_VERSION"
+    # AxonHTA is a desktop app: hide the console window on Windows.
+    if [ "$output_name" = "axonhta" ] && [ "$target_os" = "windows" ]; then
+        ldflags="$ldflags -H windowsgui"
+    fi
     local build_args=(build -trimpath -ldflags "$ldflags" -o "$output_file")
     if [ -n "$NORMALIZED_TAGS" ]; then
         build_args+=(-tags "$NORMALIZED_TAGS")

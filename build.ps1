@@ -143,6 +143,10 @@ function Build-Binary {
     $OutputFile = "${OutputName}${Extension}"
     # Linker flags: -s (strip symbol table), -w (omit DWARF), -X main.Version=... (embed version)
     $LdFlags = "-s -w -X main.Version=$FullVersion"
+    # AxonHTA is a desktop app: hide the console window on Windows.
+    if ($OutputName -eq "axonhta" -and $TargetOS -eq "windows") {
+        $LdFlags += " -H windowsgui"
+    }
     $BuildArgs = @("build", "-trimpath", "-ldflags", $LdFlags, "-o", $OutputFile)
     if ($NormalizedTags) {
         $BuildArgs += @("-tags", $NormalizedTags)

@@ -21,13 +21,17 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"mime"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"g3pix.com.br/axonasp/axonvm"
@@ -35,13 +39,25 @@ import (
 )
 
 var (
+	// Version is set at build time via -ldflags "-X main.Version=..."
+	Version = "dev"
+
 	appDir      string
 	title       string
 	width       int
 	height      int
 	port        string
+	devMode     bool
 	app         *asp.Application
 	scriptCache *axonvm.ScriptCache
+
+	// httpServer is the embedded HTTP server. Stored as a field so shutdown()
+	// can gracefully close it.
+	httpServer   *http.Server
+	shutdownOnce sync.Once
+
+	// logFile is the optional log file opened by setupLogFile().
+	logFile *os.File
 )
 
 // init registers the SVG MIME type so static file serving works correctly.
@@ -86,6 +102,7 @@ func main() {
 	flag.IntVar(&height, "height", 768, "Window height")
 	flag.StringVar(&port, "port", "0", "HTTP server port (0 for random)")
 	flag.Var(&cliAliases, "alias", "Virtual path alias, repeatable (e.g. --alias /music/=D:\\Music)")
+	flag.BoolVar(&devMode, "dev", false, "Enable developer mode (F12 DevTools, no context menu suppression)")
 	flag.Parse()
 
 	absAppDir, err := filepath.Abs(appDir)
@@ -93,6 +110,9 @@ func main() {
 		log.Fatalf("Failed to resolve app directory: %v", err)
 	}
 	appDir = absAppDir
+
+	// Set up log file (data/axonhta.log) alongside stdout.
+	setupLogFile(filepath.Join(appDir, "data", "axonhta.log"))
 
 	// Try to find and parse an HTA entry file for window configuration.
 	// Command-line flags take priority over HTA tag attributes.
@@ -130,12 +150,17 @@ func main() {
 	actualPort := listener.Addr().(*net.TCPAddr).Port
 	url := fmt.Sprintf("http://127.0.0.1:%d/", actualPort)
 
-	log.Printf("AxonHTA starting...")
+	log.Printf("AxonHTA %s starting...", Version)
 	log.Printf("App directory: %s", appDir)
 	log.Printf("Server URL: %s", url)
+	if devMode {
+		log.Println("Developer mode enabled")
+	}
+
+	httpServer = &http.Server{Handler: http.DefaultServeMux}
 
 	go func() {
-		if err := http.Serve(listener, nil); err != nil && err != http.ErrServerClosed {
+		if err := httpServer.Serve(listener); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("HTTP server error: %v", err)
 		}
 	}()
@@ -143,4 +168,56 @@ func main() {
 	waitForServer(url)
 
 	openWindow(url)
+}
+
+// shutdown performs a graceful shutdown of the HTTP server and cleans up
+// temporary files. It is safe to call multiple times; only the first call
+// has effect.
+func shutdown() {
+	shutdownOnce.Do(func() {
+		log.Println("Shutting down AxonHTA...")
+
+		// Gracefully stop the HTTP server (waits for in-flight requests).
+		if httpServer != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := httpServer.Shutdown(ctx); err != nil {
+				log.Printf("HTTP server shutdown error: %v", err)
+			}
+		}
+
+		// Clean up the temporary HTA cache directory.
+		if htaCacheDir != "" {
+			_ = os.RemoveAll(htaCacheDir)
+		}
+
+		// Close the log file if one was opened.
+		closeLogFile()
+
+		os.Exit(0)
+	})
+}
+
+// setupLogFile opens a log file and configures the standard log package to
+// write to both stdout and the file. If the file cannot be opened (e.g. the
+// data directory does not exist), logging falls back to stdout only.
+func setupLogFile(path string) {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return
+	}
+	logFile = f
+	log.SetOutput(io.MultiWriter(os.Stdout, f))
+}
+
+// closeLogFile closes the log file if one was opened.
+func closeLogFile() {
+	if logFile != nil {
+		_ = logFile.Close()
+		logFile = nil
+	}
 }

@@ -16,7 +16,7 @@
  *
  * Contribution Policy:
  * Modifications to the core source code of AxonASP Server must be
- * made available under this same license terms.
+ * made available under these same license terms.
  */
 package main
 
@@ -27,28 +27,46 @@ import (
 	"strings"
 )
 
-// appRuntimeJS is injected into every HTML response to provide a desktop-like
-// experience in Chrome app mode: disable the browser context menu and
-// drag-and-drop of page elements, and send periodic heartbeats so the
-// server knows when the browser window is still open.
-const appRuntimeJS = `<script>(function(){
+// Heartbeat timing constants used by both the injected client-side script
+// and the server-side monitorHeartbeat goroutine.
+const (
+	// heartbeatIntervalMs is how often the client sends a heartbeat ping.
+	heartbeatIntervalMs = 5000
+	// heartbeatTimeoutSec is the server-side grace period. If no heartbeat
+	// arrives within this many seconds, the window is considered closed.
+	heartbeatTimeoutSec = 15
+)
+
+// appRuntimeJSProd is the production injected script: disables context menu
+// and drag-and-drop, and sends periodic heartbeats.
+const appRuntimeJSProd = `<script>(function(){
 document.addEventListener("contextmenu",function(e){e.preventDefault();return false;});
 document.addEventListener("dragstart",function(e){e.preventDefault();return false;});
 setInterval(function(){fetch('/__heartbeat__',{method:'HEAD',cache:'no-store'}).catch(function(){})},5000);
-// Send a final heartbeat when the page is about to unload (form submission,
-// redirect navigation, or window close). This resets the server-side timeout
-// timer so the process is not killed during the navigation gap before the
-// new page's JS starts sending heartbeats.
-// sendBeacon is fire-and-forget, so it works in beforeunload/pagehide where
-// async fetch would be cancelled.
 window.addEventListener('pagehide',function(){navigator.sendBeacon('/__heartbeat__');});
 window.addEventListener('beforeunload',function(){navigator.sendBeacon('/__heartbeat__');});
 })();</script>`
 
-// injectAppScript injects appRuntimeJS before </body>, </head>, or at the
+// appRuntimeJSDev is the dev-mode injected script: heartbeats only, no
+// context menu or drag suppression so developers can right-click > Inspect.
+const appRuntimeJSDev = `<script>(function(){
+setInterval(function(){fetch('/__heartbeat__',{method:'HEAD',cache:'no-store'}).catch(function(){})},5000);
+window.addEventListener('pagehide',function(){navigator.sendBeacon('/__heartbeat__');});
+window.addEventListener('beforeunload',function(){navigator.sendBeacon('/__heartbeat__');});
+})();</script>`
+
+// activeRuntimeJS returns the appropriate runtime JS based on dev mode.
+func activeRuntimeJS() string {
+	if devMode {
+		return appRuntimeJSDev
+	}
+	return appRuntimeJSProd
+}
+
+// injectAppScript injects the runtime JS before </body>, </head>, or at the
 // end of the HTML content. The search is case-insensitive.
 func injectAppScript(html []byte) []byte {
-	script := []byte(appRuntimeJS)
+	script := []byte(activeRuntimeJS())
 	lower := bytes.ToLower(html)
 
 	if idx := bytes.Index(lower, []byte("</body>")); idx >= 0 {
@@ -72,7 +90,7 @@ func injectAppScript(html []byte) []byte {
 }
 
 // htmlInjectWriter wraps http.ResponseWriter to buffer HTML responses and
-// inject appRuntimeJS before sending to the client.
+// inject the runtime JS before sending to the client.
 //
 // Crucially, this type does NOT implement http.Flusher. The ASP Response
 // object checks for http.Flusher and calls Flush() to push content to the
@@ -89,7 +107,7 @@ type htmlInjectWriter struct {
 	headerSent bool
 }
 
-// newHTMLInjectWriter creates a response writer that injects appRuntimeJS
+// newHTMLInjectWriter creates a response writer that injects the runtime JS
 // into HTML responses.
 func newHTMLInjectWriter(w http.ResponseWriter) *htmlInjectWriter {
 	return &htmlInjectWriter{

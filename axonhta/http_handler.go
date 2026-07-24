@@ -245,10 +245,75 @@ func executeHTA(w http.ResponseWriter, r *http.Request, filePath string) {
 }
 
 // renderError writes an HTML error page to the response with details about
-// the ASP compilation or runtime error.
+// the ASP compilation or runtime error, including source code context around
+// the offending line.
 func renderError(w http.ResponseWriter, stage string, err *asp.ASPError) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusInternalServerError)
-	fmt.Fprintf(w, "<html><head><meta charset=\"utf-8\"><title>Error - AxonHTA</title><style>body{font-family:sans-serif;padding:40px;background:#f5f5f5}.card{background:#fff;border:1px solid #ddd;padding:24px;max-width:700px;margin:0 auto;border-radius:8px}h1{color:#d32f2f;font-size:20px}td{padding:8px 12px;border:1px solid #eee}td.k{background:#f8f8f8;font-weight:600;width:100px}</style></head><body><div class=\"card\"><h1>%s</h1><table><tr><td class=\"k\">Source</td><td>%s</td></tr><tr><td class=\"k\">Description</td><td>%s</td></tr><tr><td class=\"k\">File</td><td>%s</td></tr><tr><td class=\"k\">Line</td><td>%d</td></tr><tr><td class=\"k\">Column</td><td>%d</td></tr></table></div></body></html>",
-		stage, err.Source, err.Description, err.File, err.Line, err.Column)
+
+	// Try to read source context around the error line.
+	var sourceContext string
+	if err.File != "" && err.Line > 0 {
+		sourceContext = buildSourceContext(err.File, int(err.Line), 3)
+	}
+
+	fmt.Fprintf(w, `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>%s - AxonHTA</title>
+<style>
+body{font-family:'Segoe UI',sans-serif;padding:40px;background:#1e1e1e;color:#d4d4d4}
+.card{background:#2d2d2d;border:1px solid #444;padding:24px;max-width:800px;margin:0 auto;border-radius:8px}
+h1{color:#f44;font-size:20px;margin-top:0}
+td{padding:6px 12px;border:1px solid #444;vertical-align:top}
+td.k{background:#333;font-weight:600;width:90px;color:#ccc}
+.src{background:#1e1e1e;border:1px solid #444;padding:12px;margin-top:16px;border-radius:4px;overflow-x:auto;font-family:Consolas,'Courier New',monospace;font-size:13px;line-height:1.6}
+.src .ln{color:#666;display:inline-block;width:40px;text-align:right;margin-right:12px;user-select:none}
+.src .errln{background:#4a1515;display:block;margin:0 -12px;padding:0 12px}
+.src .errln .ln{color:#f66}
+</style></head><body><div class="card">
+<h1>%s</h1>
+<table>
+<tr><td class="k">Source</td><td>%s</td></tr>
+<tr><td class="k">Description</td><td>%s</td></tr>
+<tr><td class="k">File</td><td>%s</td></tr>
+<tr><td class="k">Line</td><td>%d</td></tr>
+<tr><td class="k">Column</td><td>%d</td></tr>
+</table>
+%s
+</div></body></html>`,
+		stage, stage, err.Source, err.Description, err.File, err.Line, err.Column, sourceContext)
+}
+
+// buildSourceContext reads the source file and returns HTML showing a few
+// lines of context around the specified line number.
+func buildSourceContext(filePath string, lineNum, contextLines int) string {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(string(data), "\n")
+	start := lineNum - contextLines - 1
+	if start < 0 {
+		start = 0
+	}
+	end := lineNum + contextLines
+	if end > len(lines) {
+		end = len(lines)
+	}
+
+	var buf strings.Builder
+	buf.WriteString(`<div class="src">`)
+	for i := start; i < end; i++ {
+		ln := i + 1
+		line := strings.ReplaceAll(lines[i], "&", "&amp;")
+		line = strings.ReplaceAll(line, "<", "&lt;")
+		line = strings.ReplaceAll(line, ">", "&gt;")
+		if ln == lineNum {
+			buf.WriteString(fmt.Sprintf(`<span class="errln"><span class="ln">%d</span>%s</span>`, ln, line))
+		} else {
+			buf.WriteString(fmt.Sprintf(`<span class="ln">%d</span>%s`, ln, line))
+		}
+		buf.WriteString("\n")
+	}
+	buf.WriteString("</div>")
+	return buf.String()
 }
